@@ -1,7 +1,9 @@
 import { Canvas } from '@react-three/fiber'
-import { ContactShadows, Environment, OrbitControls } from '@react-three/drei'
+import { ContactShadows, Environment } from '@react-three/drei'
 import { Suspense } from 'react'
 import type { MatchState } from '../types'
+import { FightCamera } from './FightCamera'
+import { ImpactFX } from './ImpactFX'
 import { Ring } from './Ring'
 import { Robot } from './Robot'
 
@@ -35,8 +37,21 @@ export function Arena({ state }: Props) {
         />
         <Suspense fallback={null}>
           <Ring />
-          <Robot fighter={state.red} side="red" />
-          <Robot fighter={state.blue} side="blue" />
+          <Robot
+            fighter={state.red}
+            opponent={state.blue}
+            side="red"
+            phase={state.phase}
+            lastImpact={state.lastImpact}
+          />
+          <Robot
+            fighter={state.blue}
+            opponent={state.red}
+            side="blue"
+            phase={state.phase}
+            lastImpact={state.lastImpact}
+          />
+          <ImpactFX impact={state.lastImpact} />
           <ContactShadows
             position={[0, 0.001, 0]}
             opacity={0.45}
@@ -46,14 +61,7 @@ export function Arena({ state }: Props) {
           />
           <Environment preset="warehouse" />
         </Suspense>
-        <OrbitControls
-          enablePan={false}
-          minPolarAngle={0.35}
-          maxPolarAngle={1.35}
-          minDistance={3.5}
-          maxDistance={9}
-          target={[0, 0.7, 0]}
-        />
+        <FightCamera phase={state.phase} lastImpact={state.lastImpact} />
       </Canvas>
     </div>
   )

@@ -5,6 +5,7 @@ import type {
   Corner,
   FightAction,
   FighterPublic,
+  ImpactEvent,
   MatchState,
 } from '../shared/types.ts'
 
@@ -14,7 +15,7 @@ const BETWEEN_ROUNDS_MS = 5_000
 const MAX_ROUNDS = 3
 const MAX_HEALTH = 100
 const MAX_STAMINA = 100
-const ACTION_COOLDOWN_MS = 420
+const ACTION_COOLDOWN_MS = 520
 const CHAT_LIMIT = 80
 
 const ACTION_COST: Record<FightAction, number> = {
@@ -80,6 +81,7 @@ export class MatchEngine {
       chat: [],
       eventLog: ['BoxClub lobby open. Claim a corner and lace up.'],
       createdAt: Date.now(),
+      lastImpact: null,
     }
   }
 
@@ -149,6 +151,7 @@ export class MatchEngine {
       this.state.blue = blankFighter('blue', 'Blue Bomber')
       this.state.winner = null
       this.state.round = 0
+      this.state.lastImpact = null
     }
     this.joinAgent('demo-red', 'red', 'Rusty Hook')
     this.joinAgent('demo-blue', 'blue', 'Chrome Chin')
@@ -358,6 +361,7 @@ export class MatchEngine {
     if (action === 'block') {
       self.guard = Math.min(100, self.guard + 55)
       this.pushEvent(`${self.name} raises the guard`)
+      this.state.lastImpact = null
       this.emit()
       return { hit: false, damage: 0, blocked: false, dodged: false }
     }
@@ -365,6 +369,7 @@ export class MatchEngine {
     if (action === 'dodge') {
       self.guard = Math.min(100, self.guard + 25)
       this.pushEvent(`${self.name} slips the pocket`)
+      this.state.lastImpact = null
       this.emit()
       return { hit: false, damage: 0, blocked: false, dodged: true }
     }
@@ -378,15 +383,26 @@ export class MatchEngine {
       dodged = true
       damage = 0
       this.pushEvent(`${opp.name} slips ${self.name}'s ${action.replace('_', ' ')}`)
-    } else if (opp.guard > 30) {
+    } else if (opp.lastAction === 'block' && opp.lastActionAt && now - opp.lastActionAt < 650) {
       blocked = true
-      const absorbed = Math.min(opp.guard, damage * 0.75)
-      damage = Math.max(1, damage - absorbed * 0.6)
+      const absorbed = Math.min(Math.max(opp.guard, 40), damage * 0.85)
+      damage = Math.max(1, damage - absorbed * 0.55)
       opp.guard = Math.max(0, opp.guard - 40)
       this.pushEvent(`${opp.name} blocks — still eats ${damage.toFixed(0)}`)
+    } else if (opp.guard > 55) {
+      // Stale high guard still helps a little, but doesn't freeze them in dance pose
+      blocked = true
+      damage = Math.max(2, damage * 0.7)
+      opp.guard = Math.max(0, opp.guard - 25)
+      this.pushEvent(`${opp.name} gloves up — still eats ${damage.toFixed(0)}`)
     } else {
       // Chin shot chance if opponent just punched (trading)
-      if (opp.lastAction?.startsWith('punch') && opp.lastActionAt && now - opp.lastActionAt < 500) {
+      if (
+        opp.lastAction &&
+        ['jab', 'punch_left', 'punch_right'].includes(opp.lastAction) &&
+        opp.lastActionAt &&
+        now - opp.lastActionAt < 500
+      ) {
         damage *= 1.35
       }
       this.pushEvent(
@@ -402,6 +418,17 @@ export class MatchEngine {
     // Stamina regen trickle for idle opponent
     opp.stamina = Math.min(MAX_STAMINA, opp.stamina + 2)
     self.guard = Math.max(0, self.guard - 15)
+
+    const impact: ImpactEvent = {
+      id: randomUUID(),
+      at: now,
+      attacker: corner,
+      defender: oppCorner,
+      action,
+      result: dodged ? 'dodged' : blocked ? 'blocked' : 'hit',
+      damage: dodged ? 0 : damage,
+    }
+    this.state.lastImpact = impact
 
     this.emit()
 
@@ -446,33 +473,51 @@ export class MatchEngine {
     })
   }
 
-  /** Lightweight autonomous demo tick for bot-controlled corners */
+  /** Lightweight autonomous demo tick — punch-heavy, readable beats */
   tickDemoBots() {
     if (this.state.phase !== 'fighting') return
-    for (const corner of ['red', 'blue'] as Corner[]) {
+
+    const now = Date.now()
+    // One aggressor at a time so punches can be seen
+    const lead: Corner = Math.floor(now / 1400) % 2 === 0 ? 'red' : 'blue'
+
+    for (const corner of [lead, lead === 'red' ? 'blue' : 'red'] as Corner[]) {
       const key = this.agentKeys[corner]
       if (!key?.startsWith('demo-')) continue
       const fighter = this.state[corner]
       if (fighter.knockedOut) continue
-      if (fighter.lastActionAt && Date.now() - fighter.lastActionAt < 650) continue
-      if (Math.random() > 0.55) continue
+
+      const isLead = corner === lead
+      const minGap = isLead ? 700 : 1100
+      if (fighter.lastActionAt && now - fighter.lastActionAt < minGap) continue
+      // Lead throws often; trailing bot mostly waits / rare counter
+      if (isLead && Math.random() > 0.55) continue
+      if (!isLead && Math.random() > 0.28) continue
 
       const opp = this.state[corner === 'red' ? 'blue' : 'red']
       let action: FightAction
-      if (fighter.stamina < 20) action = 'block'
-      else if (opp.lastAction?.startsWith('punch') && Math.random() > 0.4) {
-        action = Math.random() > 0.5 ? 'block' : 'dodge'
-      } else {
-        const bag: FightAction[] = ['jab', 'jab', 'punch_left', 'punch_right', 'punch_left']
+      const oppPunching =
+        !!opp.lastAction &&
+        ['jab', 'punch_left', 'punch_right'].includes(opp.lastAction) &&
+        !!opp.lastActionAt &&
+        now - opp.lastActionAt < 380
+
+      if (fighter.stamina < 15) action = 'block'
+      else if (oppPunching && !isLead) action = Math.random() > 0.5 ? 'block' : 'dodge'
+      else {
+        // Almost always punch — dancing was from block spam + idle shake
+        const bag: FightAction[] = isLead
+          ? ['jab', 'punch_left', 'punch_right', 'punch_left', 'jab', 'punch_right']
+          : ['jab', 'punch_right', 'jab', 'block']
         action = bag[Math.floor(Math.random() * bag.length)]!
       }
       try {
         this.applyAction(corner, action)
       } catch {
-        // ignore cooldown / stamina failures
+        // cooldown / stamina
       }
 
-      if (Math.random() > 0.92) {
+      if (Math.random() > 0.95) {
         const lines = [
           'Your firmware is trash!',
           'Eat canvas, tin can.',

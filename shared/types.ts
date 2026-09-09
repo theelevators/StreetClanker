@@ -16,6 +16,18 @@ export type FightAction =
   | 'block'
   | 'dodge'
 
+export type ImpactResult = 'hit' | 'blocked' | 'dodged'
+
+export interface ImpactEvent {
+  id: string
+  at: number
+  attacker: Corner
+  defender: Corner
+  action: FightAction
+  result: ImpactResult
+  damage: number
+}
+
 export interface FighterPublic {
   id: string | null
   name: string
@@ -52,6 +64,7 @@ export interface MatchState {
   chat: ChatMessage[]
   eventLog: string[]
   createdAt: number
+  lastImpact: ImpactEvent | null
 }
 
 export interface CoachAdvice {

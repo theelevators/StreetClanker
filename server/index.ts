@@ -37,7 +37,7 @@ const engine = new MatchEngine(
   (message) => broadcast({ type: 'chat', message }),
 )
 
-setInterval(() => engine.tickDemoBots(), 380)
+setInterval(() => engine.tickDemoBots(), 280)
 
 function send(ws: WebSocket, msg: ServerMessage) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg))
