@@ -257,6 +257,12 @@ code {
   color: var(--muted);
 }
 
+.lobby-record {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: rgba(255, 214, 90, 0.82);
+}
+
 .lobby-corner strong {
   font-family: var(--font-display);
   letter-spacing: 0.04em;
@@ -402,6 +408,13 @@ code {
   font-family: var(--font-display);
   letter-spacing: 0.04em;
   font-size: 1.15rem;
+}
+
+.end-card-record {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: rgba(255, 214, 90, 0.85);
+  text-transform: uppercase;
 }
 
 .end-card-hp {

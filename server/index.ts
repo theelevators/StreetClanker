@@ -13,6 +13,7 @@ import type {
   ServerMessage,
 } from '../shared/types.ts'
 import { MatchEngine } from './match.ts'
+import { fighterStore } from './fighterStore.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT ?? 8787)
@@ -72,6 +73,28 @@ app.get('/api/bout/:id', (req, res) => {
     return
   }
   res.json(bout)
+})
+
+app.get('/api/fighters', (_req, res) => {
+  res.json({ fighters: fighterStore.list() })
+})
+
+app.get('/api/card/:id', (req, res) => {
+  const card = fighterStore.get(String(req.params.id))
+  if (!card) {
+    res.status(404).json({ error: 'No card for that fighter yet — claim a corner first.' })
+    return
+  }
+  res.json(card)
+})
+
+app.post('/api/rematch', (_req, res) => {
+  try {
+    engine.rematch()
+    res.json({ ok: true, state: engine.getState(), lobby: engine.lobbyStatus() })
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Rematch failed' })
+  }
 })
 
 app.get('/api/tools', (_req, res) => {
@@ -309,6 +332,10 @@ function handleMessage(ws: WebSocket, msg: ClientMessage) {
     }
     case 'reset_match': {
       engine.reset()
+      break
+    }
+    case 'rematch': {
+      engine.rematch()
       break
     }
     case 'spawn_demo_bots': {

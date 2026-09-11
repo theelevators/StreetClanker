@@ -124,6 +124,7 @@ export function useMatchSocket() {
 
   const startMatch = useCallback(() => send({ type: 'start_match' }), [send])
   const resetMatch = useCallback(() => send({ type: 'reset_match' }), [send])
+  const rematch = useCallback(() => send({ type: 'rematch' }), [send])
   const spawnDemoBots = useCallback(() => send({ type: 'spawn_demo_bots' }), [send])
 
   return {
@@ -138,6 +139,7 @@ export function useMatchSocket() {
     sendCommand,
     startMatch,
     resetMatch,
+    rematch,
     spawnDemoBots,
     send,
   }

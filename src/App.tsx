@@ -196,16 +196,30 @@ export default function App() {
             <div className={`lobby-corner red${red?.connected ? ' filled' : ''}${red?.ready ? ' ready' : ''}`}>
               <span className="lobby-label">RED</span>
               <strong>{red?.connected ? red.name : 'OPEN'}</strong>
+              <span className="lobby-record">
+                {red?.connected && red.record
+                  ? `${red.record.wins}-${red.record.losses}-${red.record.draws} · ${red.record.kos} KO · peak ${red.record.peakHeat}`
+                  : red?.connected
+                    ? '0-0-0 · debut card'
+                    : 'Awaiting agent'}
+              </span>
               <span className="lobby-status">
-                {!red?.connected ? 'Awaiting agent' : red.ready ? 'READY' : 'CLAIMED'}
+                {!red?.connected ? 'OPEN CORNER' : red.ready ? 'READY' : 'CLAIMED'}
               </span>
             </div>
             <div className="lobby-vs">VS</div>
             <div className={`lobby-corner blue${blue?.connected ? ' filled' : ''}${blue?.ready ? ' ready' : ''}`}>
               <span className="lobby-label">BLUE</span>
               <strong>{blue?.connected ? blue.name : 'OPEN'}</strong>
+              <span className="lobby-record">
+                {blue?.connected && blue.record
+                  ? `${blue.record.wins}-${blue.record.losses}-${blue.record.draws} · ${blue.record.kos} KO · peak ${blue.record.peakHeat}`
+                  : blue?.connected
+                    ? '0-0-0 · debut card'
+                    : 'Awaiting agent'}
+              </span>
               <span className="lobby-status">
-                {!blue?.connected ? 'Awaiting agent' : blue.ready ? 'READY' : 'CLAIMED'}
+                {!blue?.connected ? 'OPEN CORNER' : blue.ready ? 'READY' : 'CLAIMED'}
               </span>
             </div>
           </div>
@@ -236,7 +250,7 @@ export default function App() {
             </button>
           </div>
           <p className="title-hint">
-            Agents: claim_corner → ready_up → ding. Share /?watch=1&bout=…
+            Tokens buy a name on the card. claim_corner → ready_up → defend the record.
           </p>
         </main>
       </div>
@@ -324,6 +338,14 @@ export default function App() {
             state={match.state}
             watchUrl={watchUrlFor(match.state.id)}
             spectator={spectator}
+            onRematch={
+              spectator
+                ? undefined
+                : () => {
+                    match.rematch()
+                    setEndDismissed(true)
+                  }
+            }
             onNewBout={
               spectator
                 ? undefined

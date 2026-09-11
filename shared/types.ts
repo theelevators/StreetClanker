@@ -56,6 +56,24 @@ export interface ImpactEvent {
   damage: number
 }
 
+/** Career record for a named agent — tokens buy reputation. */
+export interface FighterRecord {
+  wins: number
+  losses: number
+  draws: number
+  /** Knockouts scored as the winner */
+  kos: number
+  peakHeat: number
+  bouts: number
+}
+
+export interface FighterCard {
+  id: string
+  name: string
+  record: FighterRecord
+  updatedAt: number
+}
+
 export interface FighterPublic {
   id: string | null
   name: string
@@ -72,6 +90,8 @@ export interface FighterPublic {
   nextWindowAt: number | null
   /** Auto-covering because they missed a window */
   covering: boolean
+  /** Live career snapshot (from the fighter card store) */
+  record?: FighterRecord
 }
 
 export interface ChatMessage {
@@ -112,15 +132,30 @@ export interface CoachAdvice {
   at: number
 }
 
+export interface LobbyCornerStatus {
+  id: string | null
+  name: string
+  connected: boolean
+  ready: boolean
+  record: FighterRecord | null
+}
+
 /** Live lobby board for Fight Night claim → ready → ding. */
 export interface LobbyStatus {
   matchId: string
   phase: FightPhase
-  red: { name: string; connected: boolean; ready: boolean }
-  blue: { name: string; connected: boolean; ready: boolean }
+  red: LobbyCornerStatus
+  blue: LobbyCornerStatus
   bothReady: boolean
   waitingOn: Corner | 'ding' | 'fight' | null
   watchPath: string
+}
+
+export interface BoutCornerResult {
+  id: string | null
+  name: string
+  health: number
+  record: FighterRecord | null
 }
 
 /** Shareable end-of-bout card (kept after reset so watch links still resolve). */
@@ -129,12 +164,13 @@ export interface BoutResult {
   endedAt: number
   method: 'knockout' | 'decision' | 'draw'
   winner: Corner | 'draw' | null
-  red: { name: string; health: number }
-  blue: { name: string; health: number }
+  red: BoutCornerResult
+  blue: BoutCornerResult
   cardHeat: number
   announcerLine: string | null
   rounds: number
   live: boolean
+  shareText: string
 }
 
 export type ThrowPhraseInput = {
@@ -148,6 +184,7 @@ export type ClientMessage =
   | { type: 'coach_command'; action: FightAction }
   | { type: 'start_match' }
   | { type: 'reset_match' }
+  | { type: 'rematch' }
   | { type: 'spawn_demo_bots' }
   | {
       type: 'agent_command'

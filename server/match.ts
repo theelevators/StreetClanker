@@ -16,6 +16,7 @@ import type {
   PhraseStyle,
   ThrowPhraseInput,
 } from '../shared/types.ts'
+import { fighterStore, formatRecord } from './fighterStore.ts'
 
 const ROUND_MS = 45_000
 const COUNTDOWN_MS = 3_000
@@ -135,6 +136,8 @@ export class MatchEngine {
   agentKeys: Partial<Record<Corner, string>> = {}
   /** Last finished bout — survives reset so share links still resolve. */
   lastFinished: BoutResult | null = null
+  /** Prevent double-counting when knockout/decision also schedules ended. */
+  private scoredMatchId: string | null = null
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private onChange: (state: MatchState) => void
   private onChat: (message: ChatMessage) => void
@@ -193,8 +196,20 @@ export class MatchEngine {
     return {
       matchId: id,
       phase,
-      red: { name: red.name, connected: red.connected, ready: red.ready },
-      blue: { name: blue.name, connected: blue.connected, ready: blue.ready },
+      red: {
+        id: red.id,
+        name: red.name,
+        connected: red.connected,
+        ready: red.ready,
+        record: red.record ?? fighterStore.snapshot(red.id),
+      },
+      blue: {
+        id: blue.id,
+        name: blue.name,
+        connected: blue.connected,
+        ready: blue.ready,
+        record: blue.record ?? fighterStore.snapshot(blue.id),
+      },
       bothReady,
       waitingOn,
       watchPath: `/?watch=1&bout=${id}`,
@@ -209,23 +224,40 @@ export class MatchEngine {
       if (terminal) {
         return this.snapshotFromState(live, true)
       }
-      return {
-        id: live.id,
-        endedAt: Date.now(),
-        method: 'decision',
-        winner: null,
-        red: { name: live.red.name, health: live.red.health },
-        blue: { name: live.blue.name, health: live.blue.health },
-        cardHeat: Math.round(live.cardHeat),
-        announcerLine: live.announcerLine,
-        rounds: live.round,
-        live: true,
-      }
+      return this.snapshotFromState(live, true)
     }
     if (this.lastFinished?.id === id) {
       return { ...this.lastFinished, live: false }
     }
     return null
+  }
+
+  private cornerResult(fighter: FighterPublic) {
+    return {
+      id: fighter.id,
+      name: fighter.name,
+      health: fighter.health,
+      record: fighter.record ?? fighterStore.snapshot(fighter.id),
+    }
+  }
+
+  private buildShareText(state: MatchState, method: BoutResult['method']): string {
+    const redRec = state.red.record ?? fighterStore.snapshot(state.red.id)
+    const blueRec = state.blue.record ?? fighterStore.snapshot(state.blue.id)
+    const fmt = (name: string, rec: typeof redRec) =>
+      rec ? `${name} (${formatRecord(rec)}, peak ${rec.peakHeat})` : name
+    const red = fmt(state.red.name, redRec)
+    const blue = fmt(state.blue.name, blueRec)
+    if (state.winner === 'draw') {
+      return `${red} vs ${blue} ends in a DRAW — watch: /?watch=1&bout=${state.id}`
+    }
+    if (state.winner === 'red') {
+      return `${red} def. ${blue} by ${method.toUpperCase()} — watch: /?watch=1&bout=${state.id}`
+    }
+    if (state.winner === 'blue') {
+      return `${blue} def. ${red} by ${method.toUpperCase()} — watch: /?watch=1&bout=${state.id}`
+    }
+    return `${red} vs ${blue} — watch: /?watch=1&bout=${state.id}`
   }
 
   private snapshotFromState(state: MatchState, live: boolean): BoutResult {
@@ -240,16 +272,43 @@ export class MatchEngine {
       endedAt: Date.now(),
       method,
       winner: state.winner,
-      red: { name: state.red.name, health: state.red.health },
-      blue: { name: state.blue.name, health: state.blue.health },
+      red: this.cornerResult(state.red),
+      blue: this.cornerResult(state.blue),
       cardHeat: Math.round(state.cardHeat),
       announcerLine: state.announcerLine,
       rounds: state.round,
       live,
+      shareText: this.buildShareText(state, method),
     }
   }
 
   private rememberFinished() {
+    if (this.scoredMatchId !== this.state.id) {
+      this.scoredMatchId = this.state.id
+      fighterStore.applyBout({
+        redId: this.state.red.id,
+        blueId: this.state.blue.id,
+        redName: this.state.red.name,
+        blueName: this.state.blue.name,
+        winner: this.state.winner,
+        method:
+          this.state.winner === 'draw'
+            ? 'draw'
+            : this.state.phase === 'knockout' ||
+                this.state.red.knockedOut ||
+                this.state.blue.knockedOut
+              ? 'knockout'
+              : 'decision',
+        cardHeat: this.state.cardHeat,
+      })
+      // Refresh live fighter records after scoring
+      if (this.state.red.id) {
+        this.state.red.record = fighterStore.snapshot(this.state.red.id) ?? undefined
+      }
+      if (this.state.blue.id) {
+        this.state.blue.record = fighterStore.snapshot(this.state.blue.id) ?? undefined
+      }
+    }
     this.lastFinished = this.snapshotFromState(this.state, false)
   }
 
@@ -312,6 +371,33 @@ export class MatchEngine {
     this.emit()
   }
 
+  /** Keep the same two fighters for another bout — reputation stays on the card. */
+  rematch() {
+    const redKey = this.agentKeys.red
+    const blueKey = this.agentKeys.blue
+    const redName = this.state.red.name
+    const blueName = this.state.blue.name
+    const redConnected = this.state.red.connected
+    const blueConnected = this.state.blue.connected
+    if (!redKey || !blueKey || !redConnected || !blueConnected) {
+      throw new Error('Need both named fighters still in the corners for a rematch')
+    }
+    this.clearTimers()
+    this.coachAdvice = { red: [], blue: [] }
+    this.coverLatch = { red: 0, blue: 0 }
+    this.scoredMatchId = null
+    this.state = this.createLobby()
+    this.agentKeys = { red: redKey, blue: blueKey }
+    this.joinAgent(redKey, 'red', redName)
+    this.joinAgent(blueKey, 'blue', blueName)
+    this.pushChat({
+      from: 'system',
+      name: 'Ring Announcer',
+      text: `Rematch! ${redName} vs ${blueName} — same blood, fresh canvas.`,
+    })
+    this.emit()
+  }
+
   spawnDemoBots() {
     if (this.state.phase !== 'lobby') {
       this.clearTimers()
@@ -355,10 +441,12 @@ export class MatchEngine {
     }
     this.agentKeys[corner] = agentKey
     const fighter = this.state[corner]
+    const card = fighterStore.getOrCreate(agentKey, name)
     fighter.id = agentKey
-    fighter.name = name.slice(0, 24) || (corner === 'red' ? 'Red Rocker' : 'Blue Bomber')
+    fighter.name = card.name
     fighter.connected = true
     fighter.ready = false
+    fighter.record = { ...card.record }
     this.pushEvent(`${fighter.name} claimed the ${corner} corner`)
     this.pushChat({
       from: 'system',

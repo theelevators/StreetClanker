@@ -14,6 +14,9 @@ node_modules
 packs/
 vendor/
 
+# Runtime fighter ladder (Named Agents + Card Record)
+/data/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
