@@ -61,8 +61,8 @@ code {
 
 .brand-mark {
   font-family: var(--font-display);
-  letter-spacing: 0.08em;
-  font-size: clamp(2.8rem, 8vw, 5.5rem);
+  letter-spacing: 0.04em;
+  font-size: clamp(2.2rem, 7vw, 4.4rem);
   line-height: 0.9;
   margin: 0;
   color: var(--yellow-hot);
@@ -88,10 +88,17 @@ code {
   position: relative;
   min-height: 100dvh;
   height: 100%;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: grid;
-  place-items: center;
-  padding: 2rem 1.25rem;
+  place-items: safe center;
+  align-content: safe center;
+  padding:
+    max(1.25rem, env(safe-area-inset-top, 0px))
+    max(1rem, env(safe-area-inset-right, 0px))
+    max(1.5rem, env(safe-area-inset-bottom, 0px))
+    max(1rem, env(safe-area-inset-left, 0px));
 }
 
 .title-stage {
@@ -158,6 +165,7 @@ code {
 .title-main {
   position: relative;
   z-index: 1;
+  width: min(100%, 720px);
   max-width: 720px;
   text-align: center;
   animation: title-rise 0.7s ease both;
@@ -212,6 +220,7 @@ code {
 
 .title-main.fight-night {
   max-width: 780px;
+  width: min(100%, 780px);
 }
 
 .lobby-board {
@@ -341,6 +350,8 @@ code {
   padding-bottom: 0.35rem;
   margin-bottom: 0.85rem;
   scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
 }
 
 .undercard-ticket {
@@ -353,6 +364,7 @@ code {
   background: rgba(8, 6, 4, 0.55);
   display: grid;
   gap: 0.2rem;
+  scroll-snap-align: start;
 }
 
 .undercard-ticket.ring {
@@ -480,6 +492,19 @@ code {
 @media (max-width: 640px) {
   .challenge-post {
     grid-template-columns: 1fr;
+  }
+
+  .challenge-mine,
+  .challenge-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.55rem;
+  }
+
+  .challenge-mine button,
+  .challenge-row button {
+    width: 100%;
+    min-height: 2.75rem;
   }
 }
 
@@ -640,7 +665,8 @@ code {
 @media (max-width: 720px) {
   .lobby-board {
     grid-template-columns: 1fr;
-    max-width: 18rem;
+    max-width: none;
+    width: 100%;
   }
 
   .lobby-vs {
@@ -751,7 +777,11 @@ code {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 0.35rem;
-  padding: 0.65rem 0.75rem 0.55rem;
+  padding:
+    max(0.55rem, env(safe-area-inset-top, 0px))
+    max(0.65rem, env(safe-area-inset-right, 0px))
+    max(0.45rem, env(safe-area-inset-bottom, 0px))
+    max(0.65rem, env(safe-area-inset-left, 0px));
   pointer-events: none;
   background:
     linear-gradient(180deg, rgba(8, 6, 4, 0.55) 0%, transparent 18%),
@@ -787,8 +817,8 @@ code {
 
 .ring-logo {
   font-family: var(--font-display);
-  letter-spacing: 0.1em;
-  font-size: clamp(1.55rem, 3.5vw, 2.1rem);
+  letter-spacing: 0.06em;
+  font-size: clamp(1.15rem, 2.8vw, 1.7rem);
   line-height: 1;
   color: var(--yellow-hot);
   text-shadow: 0 0 24px rgba(232, 185, 35, 0.35);
@@ -1705,7 +1735,7 @@ code {
   }
 
   .announcer-slot {
-    padding-bottom: 5vh;
+    padding-bottom: max(4.5vh, env(safe-area-inset-bottom, 0px));
   }
 
   .ring-logo {
@@ -1714,6 +1744,14 @@ code {
 
   .meter {
     padding: 0.45rem 0.55rem;
+  }
+
+  .meter-name {
+    font-size: 0.82rem;
+  }
+
+  .phrase-beat {
+    font-size: 0.82rem;
   }
 }
 
@@ -1728,14 +1766,24 @@ code {
     linear-gradient(180deg, rgba(22, 16, 12, 0.78), rgba(8, 6, 4, 0.88)),
     radial-gradient(120% 80% at 50% -20%, rgba(255, 180, 60, 0.14), transparent 55%);
   text-align: left;
+  max-height: min(70vh, 34rem);
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .crowd-book.compact {
   width: min(100%, 22rem);
   margin: 0.6rem 0 0;
   padding: 0.75rem 0.8rem;
-  background: rgba(8, 6, 4, 0.72);
-  backdrop-filter: blur(10px);
+  background: rgba(8, 6, 4, 0.78);
+  backdrop-filter: blur(12px);
+  max-height: min(58vh, 28rem);
+}
+
+.crowd-book.compact.collapsed {
+  max-height: none;
+  overflow: visible;
+  padding: 0.45rem 0.55rem;
 }
 
 .crowd-book-float {
@@ -1770,12 +1818,66 @@ code {
   line-height: 1.35;
 }
 
+.crowd-sheet-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0.2rem;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  min-height: 2.75rem;
+}
+
+.crowd-sheet-toggle-copy {
+  display: grid;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.crowd-sheet-toggle-copy strong {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  font-size: 1.25rem;
+}
+
+.crowd-sheet-toggle-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.crowd-sheet-toggle-meta em {
+  font-family: var(--font-display);
+  font-style: normal;
+  font-size: 1.35rem;
+  color: var(--yellow-hot, #ffd65a);
+}
+
+.crowd-sheet-chevron {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.crowd-book-body {
+  margin-top: 0.55rem;
+}
+
 .crowd-wallet-row {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 0.65rem;
   align-items: end;
   margin: 0.85rem 0 0.7rem;
+}
+
+.crowd-book.compact .crowd-wallet-row {
+  grid-template-columns: 1fr;
+  margin-top: 0.35rem;
 }
 
 .crowd-wallet-row label {
@@ -1788,12 +1890,13 @@ code {
 }
 
 .crowd-wallet-row input {
-  padding: 0.45rem 0.55rem;
+  padding: 0.55rem 0.65rem;
   border-radius: 4px;
   border: 1px solid rgba(255, 220, 140, 0.2);
   background: rgba(6, 4, 3, 0.65);
   color: var(--ink);
   font: inherit;
+  min-height: 2.6rem;
 }
 
 .crowd-chips {
@@ -1900,21 +2003,21 @@ code {
 
 .crowd-corner-picks .claim {
   flex: 1 1 7rem;
-  min-height: 2.4rem;
+  min-height: 2.75rem;
 }
 
 .crowd-bet-row .claim.wide {
   width: 100%;
-  min-height: 2.55rem;
+  min-height: 2.75rem;
   position: sticky;
   bottom: 0.35rem;
   z-index: 2;
 }
 
-.crowd-book {
-  max-height: min(70vh, 34rem);
-  overflow: auto;
-  overscroll-behavior: contain;
+.crowd-stakes .ghost.stake,
+.crowd-mods .ghost {
+  min-height: 2.5rem;
+  padding: 0.45rem 0.75rem;
 }
 
 .crowd-stakes .stake.active,
@@ -1929,10 +2032,233 @@ code {
   font-size: 0.82rem;
 }
 
+/* —— Mobile polish —— */
 @media (max-width: 720px) {
-  .crowd-book-float {
-    position: static;
+  .brand-mark {
+    font-size: clamp(1.85rem, 11vw, 2.8rem);
+    letter-spacing: 0.03em;
+  }
+
+  .ring-logo {
+    font-size: clamp(1.05rem, 4.5vw, 1.35rem);
+    letter-spacing: 0.04em;
+  }
+
+  .title-screen {
+    place-items: start center;
+    align-content: start;
+    padding-top: max(1rem, env(safe-area-inset-top, 0px));
+  }
+
+  .title-main {
+    padding-bottom: 1.25rem;
+  }
+
+  .title-main h1 {
+    font-size: clamp(1.45rem, 6.5vw, 2rem);
+  }
+
+  .lede {
+    font-size: 0.95rem;
+    margin-bottom: 1.1rem;
+  }
+
+  .challenge-board,
+  .crowd-book:not(.compact) {
+    width: 100%;
     max-width: none;
-    margin: 0.5rem 0.75rem 0;
+    max-height: none;
+  }
+
+  .challenge-board {
+    padding: 0.85rem 0.85rem 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .challenge-head h2 {
+    font-size: 1.35rem;
+  }
+
+  .undercard-ticket {
+    min-width: 9.25rem;
+  }
+
+  .claim,
+  .ghost:not(.compact):not(.stake) {
+    min-height: 2.85rem;
+  }
+
+  .challenge-post input,
+  .challenge-post select {
+    min-height: 2.65rem;
+    font-size: 1rem;
+  }
+
+  .ring-chrome {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 0.45rem;
+  }
+
+  .ring-brand {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    row-gap: 0.2rem;
+  }
+
+  .ring-live {
+    font-size: 0.62rem;
+  }
+
+  .ring-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .ring-actions .chrome-btn {
+    flex: 1 1 auto;
+    min-height: 2.55rem;
+    padding: 0.5rem 0.55rem;
+    font-size: 0.74rem;
+  }
+
+  .ring-drawer {
+    width: 100%;
+    padding:
+      max(0.65rem, env(safe-area-inset-top, 0px))
+      max(0.65rem, env(safe-area-inset-right, 0px))
+      max(0.65rem, env(safe-area-inset-bottom, 0px))
+      max(0.65rem, env(safe-area-inset-left, 0px));
+  }
+
+  .ring-drawer .chat-panel {
+    min-height: calc(100dvh - 1.5rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    height: auto;
+  }
+
+  .ring-ticker {
+    gap: 0.75rem;
+    font-size: 0.68rem;
+    padding-right: 0.25rem;
+  }
+
+  .end-card {
+    padding:
+      max(0.85rem, env(safe-area-inset-top, 0px))
+      0.85rem
+      max(0.85rem, env(safe-area-inset-bottom, 0px));
+    align-items: end;
+  }
+
+  .end-card-panel {
+    width: 100%;
+    max-height: min(92dvh, 100%);
+    overflow: auto;
+    padding: 1.1rem 0.95rem 1rem;
+  }
+
+  .end-card-fighters {
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
+  }
+
+  .end-card-vs {
+    justify-self: center;
+  }
+
+  .end-card-corner.blue {
+    text-align: left;
+    border-right: 0;
+    border-left: 3px solid var(--blue);
+  }
+
+  .end-card-meta {
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .crowd-book-float {
+    left: max(0.5rem, env(safe-area-inset-left, 0px));
+    right: max(0.5rem, env(safe-area-inset-right, 0px));
+    top: auto;
+    bottom: calc(2.35rem + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+    margin: 0;
+  }
+
+  .crowd-book.compact {
+    width: 100%;
+    margin: 0;
+    max-height: min(46vh, 22rem);
+    border-radius: 10px 10px 6px 6px;
+    box-shadow: 0 -10px 36px rgba(0, 0, 0, 0.45);
+  }
+
+  .crowd-book.compact.collapsed {
+    max-height: none;
+  }
+
+  .crowd-stakes .ghost.stake,
+  .crowd-mods .ghost {
+    min-height: 2.75rem;
+    min-width: 3.25rem;
+    flex: 1 1 3.25rem;
+  }
+
+  .title-ctas {
+    width: 100%;
+    gap: 0.65rem;
+  }
+
+  .title-ctas .claim,
+  .title-ctas .ghost {
+    width: 100%;
+  }
+
+  .lobby-board {
+    width: 100%;
+    max-width: none;
+  }
+
+  .crowd-odds {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+  }
+
+  .crowd-odds-status {
+    grid-column: 1 / -1;
+    grid-template-columns: auto auto;
+    justify-content: center;
+    gap: 0.65rem;
+    order: -1;
+  }
+
+  .crowd-odds-corner.blue {
+    text-align: left;
+    border-right: 0;
+    border-left: 3px solid var(--blue);
+  }
+
+  .announcer-banner {
+    max-width: 100%;
+    padding: 0.5rem 0.7rem;
+  }
+
+  .announcer-banner p {
+    font-size: clamp(0.95rem, 4.2vw, 1.2rem);
+  }
+}
+
+@media (max-width: 420px) {
+  .ring-actions .chrome-btn {
+    flex: 1 1 calc(50% - 0.35rem);
+  }
+
+  .hud-center {
+    grid-template-columns: 1fr auto;
+  }
+
+  .hud-phase {
+    grid-column: 1 / -1;
   }
 }

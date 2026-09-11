@@ -194,7 +194,7 @@ function makeBrandSprite() {
   ctx.font = 'bold 72px Impact, Bebas Neue, sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.fillText('BOXCLUB', 256, 64)
+  ctx.fillText('STREETCLANKER', 256, 64)
   const tex = new THREE.CanvasTexture(canvas)
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(1.8, 0.45),

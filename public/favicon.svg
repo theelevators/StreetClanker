@@ -1,8 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect width="64" height="64" rx="12" fill="#1a1208"/>
-  <rect x="8" y="36" width="48" height="16" rx="3" fill="#e8b923"/>
-  <rect x="14" y="18" width="14" height="18" rx="2" fill="#e23b2f"/>
-  <rect x="36" y="18" width="14" height="18" rx="2" fill="#2f7fd4"/>
-  <circle cx="21" cy="24" r="2" fill="#ffef8a"/>
-  <circle cx="43" cy="24" r="2" fill="#ffef8a"/>
+  <rect width="64" height="64" rx="12" fill="#140f0c"/>
+  <rect x="6" y="38" width="52" height="14" rx="3" fill="#e8b923"/>
+  <rect x="12" y="16" width="16" height="22" rx="3" fill="#e23b2f"/>
+  <rect x="36" y="16" width="16" height="22" rx="3" fill="#2f7fd4"/>
+  <circle cx="20" cy="24" r="2.2" fill="#ffef8a"/>
+  <circle cx="44" cy="24" r="2.2" fill="#ffef8a"/>
+  <text
+    x="32"
+    y="49.5"
+    text-anchor="middle"
+    font-family="Impact, Haettenschweiler, sans-serif"
+    font-size="9"
+    letter-spacing="0.08em"
+    fill="#1a1208"
+  >SC</text>
 </svg>

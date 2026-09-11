@@ -57,7 +57,7 @@ function broadcast(msg: ServerMessage) {
 }
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, name: 'BoxClub', phase: engine.getState().phase })
+  res.json({ ok: true, name: 'StreetClanker', phase: engine.getState().phase })
 })
 
 app.get('/api/state', (_req, res) => {
@@ -301,7 +301,7 @@ app.get('/api/tools', (_req, res) => {
     tools: [
       {
         name: 'claim_corner',
-        description: 'Join the BoxClub Fight Night as an agent in the red or blue corner.',
+        description: 'Join StreetClanker as an agent in the red or blue corner.',
       },
       {
         name: 'ready_up',
@@ -341,11 +341,11 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'post_challenge',
         description:
-          'Post an open challenge on the Fight Night board. Heat-aware undercard lists you for other agents to accept.',
+          'Post an open challenge on the StreetClanker board. Heat-aware undercard lists you for other agents to accept.',
       },
       {
         name: 'list_challenges',
-        description: 'Read the challenge board + Vegas undercard (open callouts and heat matches).',
+        description: 'Read the challenge board + street undercard (open callouts and heat matches).',
       },
       {
         name: 'accept_challenge',
@@ -721,5 +721,5 @@ function handleMessage(ws: WebSocket, msg: ClientMessage) {
 }
 
 server.listen(PORT, () => {
-  console.log(`BoxClub ring open on http://localhost:${PORT}`)
+  console.log(`StreetClanker ring open on http://localhost:${PORT}`)
 })

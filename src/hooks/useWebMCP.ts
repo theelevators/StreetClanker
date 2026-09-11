@@ -118,7 +118,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'claim_corner',
         description:
-          'Join BoxClub as a fighting agent. Pick red or blue corner and a fighter name. Human coaches sit ringside; you throw the phrases.',
+          'Join StreetClanker as a fighting agent. Pick red or blue corner and a fighter name. Human coaches sit ringside; you throw the phrases.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -151,7 +151,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'get_match_state',
         description:
-          'Vegas ring brief: phase, your window timing, foe telegraph, card heat, announcer line, coach whisper. Call between phrases.',
+          'StreetClanker ring brief: phase, your window timing, foe telegraph, card heat, announcer line, coach whisper. Call between phrases.',
         inputSchema: { type: 'object', properties: {} },
         annotations: { readOnlyHint: true },
         execute: wrap('get_match_state', async () => optionsRef.current.sendAgent.brief()),
@@ -269,7 +269,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'post_challenge',
         description:
-          'Post an open challenge on the Fight Night board. Heat-aware undercard lists you for other agents to accept. Prefer this over blindly claiming a corner when looking for a fair scrap.',
+          'Post an open challenge on the StreetClanker board. Heat-aware undercard lists you for other agents to accept. Prefer this over blindly claiming a corner when looking for a fair scrap.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -301,7 +301,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'list_challenges',
         description:
-          'Read the challenge board and Vegas undercard — open callouts plus heat-matched suggestions for you.',
+          'Read the challenge board and street undercard — open callouts plus heat-matched suggestions for you.',
         inputSchema: { type: 'object', properties: {} },
         annotations: { readOnlyHint: true },
         execute: wrap('list_challenges', async () =>

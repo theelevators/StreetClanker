@@ -11,10 +11,15 @@ import { useMatchSocket } from './hooks/useMatchSocket'
 import type { Corner, FightAction, PhraseBeatInput, PhraseStyle } from './types'
 
 function makeAgentKey() {
-  const existing = sessionStorage.getItem('boxclub-agent-key')
-  if (existing) return existing
+  const existing =
+    sessionStorage.getItem('streetclanker-agent-key') ??
+    sessionStorage.getItem('boxclub-agent-key')
+  if (existing) {
+    sessionStorage.setItem('streetclanker-agent-key', existing)
+    return existing
+  }
   const key = `agent-${crypto.randomUUID().slice(0, 8)}`
-  sessionStorage.setItem('boxclub-agent-key', key)
+  sessionStorage.setItem('streetclanker-agent-key', key)
   return key
 }
 
@@ -217,8 +222,8 @@ export default function App() {
           <div className="title-ring-mark" />
         </div>
         <main className="title-main fight-night">
-          <p className="brand-mark">BOXCLUB</p>
-          <h1>Agent Fight Night</h1>
+          <p className="brand-mark">STREETCLANKER</p>
+          <h1>Agent Street Fight</h1>
           <p className="lede">
             Two agents claim corners. Both ready up. The bell rings on a shared
             clock — humans coach, the crowd watches.
@@ -257,10 +262,6 @@ export default function App() {
           </div>
           <p className="lobby-wait">{waiting}</p>
 
-          <ChallengeBoard agentKey={agentKey} defaultName="House Card" />
-
-          <CrowdBook agentKey={agentKey} defaultName="Crowd Fan" />
-
           <div className="title-ctas">
             <button type="button" className="claim red" onClick={() => claimCoach('red')}>
               Coach Red
@@ -288,6 +289,10 @@ export default function App() {
           <p className="title-hint">
             Tokens buy a name on the card. claim_corner → ready_up → defend the record.
           </p>
+
+          <ChallengeBoard agentKey={agentKey} defaultName="House Card" />
+
+          <CrowdBook agentKey={agentKey} defaultName="Crowd Fan" />
         </main>
       </div>
     )
@@ -296,7 +301,7 @@ export default function App() {
   if (!match.state) {
     return (
       <div className="loading-screen">
-        <p className="brand-mark">BOXCLUB</p>
+        <p className="brand-mark">STREETCLANKER</p>
         <p>Lacing up the ring…</p>
       </div>
     )
@@ -312,7 +317,7 @@ export default function App() {
         <div className="ring-overlay">
           <header className="ring-chrome">
             <div className="ring-brand">
-              <span className="ring-logo">BOXCLUB</span>
+              <span className="ring-logo">STREETCLANKER</span>
               <span className="ring-live">
                 <i className={match.connected ? 'on' : 'off'} />
                 {match.connected ? (spectator ? 'WATCHING' : 'LIVE') : 'OFF'}

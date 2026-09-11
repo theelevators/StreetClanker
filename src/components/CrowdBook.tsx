@@ -16,6 +16,11 @@ export function CrowdBook({ agentKey, defaultName = 'Crowd Fan', compact }: Prop
   const [stake, setStake] = useState(50)
   const [busy, setBusy] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
+  const [sheetOpen, setSheetOpen] = useState(() => {
+    if (!compact) return true
+    if (typeof window === 'undefined') return true
+    return !window.matchMedia('(max-width: 720px)').matches
+  })
 
   const refresh = useCallback(async () => {
     try {
@@ -34,6 +39,14 @@ export function CrowdBook({ agentKey, defaultName = 'Crowd Fan', compact }: Prop
     const t = window.setInterval(() => void refresh(), 2500)
     return () => window.clearInterval(t)
   }, [refresh])
+
+  useEffect(() => {
+    if (!compact) return
+    const mq = window.matchMedia('(max-width: 720px)')
+    const onChange = () => setSheetOpen(!mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [compact])
 
   const flashMsg = (msg: string) => {
     setFlash(msg)
@@ -95,119 +108,150 @@ export function CrowdBook({ agentKey, defaultName = 'Crowd Fan', compact }: Prop
   const wallet = ledger?.wallet
   const open = book?.status === 'open'
   const myOpen = ledger?.myBets.find((b) => b.status === 'open' && b.matchId === book?.matchId)
+  const collapsed = compact && !sheetOpen
 
   return (
-    <section className={`crowd-book${compact ? ' compact' : ''}`} aria-label="Crowd book">
+    <section
+      className={`crowd-book${compact ? ' compact' : ''}${collapsed ? ' collapsed' : ''}`}
+      aria-label="Crowd book"
+    >
       <header className="crowd-book-head">
-        <p className="crowd-book-kicker">Crowd Book</p>
-        <h2>House Chips</h2>
-        {!compact && (
-          <p className="crowd-book-sub">
-            Bet the moneyline before the bell. Cheap mods juice the card while you watch.
-          </p>
+        {compact ? (
+          <button
+            type="button"
+            className="crowd-sheet-toggle"
+            aria-expanded={sheetOpen}
+            onClick={() => setSheetOpen((v) => !v)}
+          >
+            <span className="crowd-sheet-toggle-copy">
+              <span className="crowd-book-kicker">Crowd Book</span>
+              <strong>House Chips</strong>
+            </span>
+            <span className="crowd-sheet-toggle-meta" aria-live="polite">
+              <span className="crowd-chips-label">BANKROLL</span>
+              <em>{wallet ? wallet.chips : '—'}</em>
+              <span className="crowd-sheet-chevron" aria-hidden="true">
+                {sheetOpen ? '▾' : '▴'}
+              </span>
+            </span>
+          </button>
+        ) : (
+          <>
+            <p className="crowd-book-kicker">Crowd Book</p>
+            <h2>House Chips</h2>
+            <p className="crowd-book-sub">
+              Bet the moneyline before the bell. Cheap mods juice the card while you watch.
+            </p>
+          </>
         )}
       </header>
 
-      <div className="crowd-wallet-row">
-        <label>
-          Bettor name
-          <input
-            value={name}
-            maxLength={24}
-            onChange={(e) => setName(e.target.value.slice(0, 24))}
-            placeholder="Crowd Fan"
-          />
-        </label>
-        <div className="crowd-chips" aria-live="polite">
-          <span className="crowd-chips-label">BANKROLL</span>
-          <strong>{wallet ? wallet.chips : '—'}</strong>
-        </div>
-      </div>
-
-      <div className="crowd-odds" aria-live="polite">
-        <div className={`crowd-odds-corner red${corner === 'red' ? ' picked' : ''}`}>
-          <span className="crowd-odds-name">{book?.redName ?? 'RED'}</span>
-          <strong>{book ? book.redOdds.toFixed(2) : '—'}</strong>
-          <span className="crowd-odds-pool">pool {book?.redPool ?? 0}</span>
-        </div>
-        <div className="crowd-odds-status">
-          <span>{(book?.status ?? 'closed').toUpperCase()}</span>
-          <span className="crowd-odds-meta">{book?.betCount ?? 0} tickets</span>
-        </div>
-        <div className={`crowd-odds-corner blue${corner === 'blue' ? ' picked' : ''}`}>
-          <span className="crowd-odds-name">{book?.blueName ?? 'BLUE'}</span>
-          <strong>{book ? book.blueOdds.toFixed(2) : '—'}</strong>
-          <span className="crowd-odds-pool">pool {book?.bluePool ?? 0}</span>
-        </div>
-      </div>
-
-      {myOpen ? (
-        <p className="crowd-ticket">
-          Your ticket: <strong>{myOpen.corner.toUpperCase()}</strong> · {myOpen.stake} @{' '}
-          {myOpen.odds.toFixed(2)}
-        </p>
-      ) : (
-        <div className="crowd-bet-row">
-          <div className="crowd-corner-picks">
-            <button
-              type="button"
-              className={`claim red${corner === 'red' ? ' active' : ''}`}
-              disabled={!open || busy}
-              onClick={() => setCorner('red')}
-            >
-              Bet Red
-            </button>
-            <button
-              type="button"
-              className={`claim blue${corner === 'blue' ? ' active' : ''}`}
-              disabled={!open || busy}
-              onClick={() => setCorner('blue')}
-            >
-              Bet Blue
-            </button>
+      {!collapsed && (
+        <div className="crowd-book-body">
+          <div className="crowd-wallet-row">
+            <label>
+              Bettor name
+              <input
+                value={name}
+                maxLength={24}
+                onChange={(e) => setName(e.target.value.slice(0, 24))}
+                placeholder="Crowd Fan"
+              />
+            </label>
+            {!compact && (
+              <div className="crowd-chips" aria-live="polite">
+                <span className="crowd-chips-label">BANKROLL</span>
+                <strong>{wallet ? wallet.chips : '—'}</strong>
+              </div>
+            )}
           </div>
-          <div className="crowd-stakes">
-            {STAKE_PRESETS.map((s) => (
+
+          <div className="crowd-odds" aria-live="polite">
+            <div className={`crowd-odds-corner red${corner === 'red' ? ' picked' : ''}`}>
+              <span className="crowd-odds-name">{book?.redName ?? 'RED'}</span>
+              <strong>{book ? book.redOdds.toFixed(2) : '—'}</strong>
+              <span className="crowd-odds-pool">pool {book?.redPool ?? 0}</span>
+            </div>
+            <div className="crowd-odds-status">
+              <span>{(book?.status ?? 'closed').toUpperCase()}</span>
+              <span className="crowd-odds-meta">{book?.betCount ?? 0} tickets</span>
+            </div>
+            <div className={`crowd-odds-corner blue${corner === 'blue' ? ' picked' : ''}`}>
+              <span className="crowd-odds-name">{book?.blueName ?? 'BLUE'}</span>
+              <strong>{book ? book.blueOdds.toFixed(2) : '—'}</strong>
+              <span className="crowd-odds-pool">pool {book?.bluePool ?? 0}</span>
+            </div>
+          </div>
+
+          {myOpen ? (
+            <p className="crowd-ticket">
+              Your ticket: <strong>{myOpen.corner.toUpperCase()}</strong> · {myOpen.stake} @{' '}
+              {myOpen.odds.toFixed(2)}
+            </p>
+          ) : (
+            <div className="crowd-bet-row">
+              <div className="crowd-corner-picks">
+                <button
+                  type="button"
+                  className={`claim red${corner === 'red' ? ' active' : ''}`}
+                  disabled={!open || busy}
+                  onClick={() => setCorner('red')}
+                >
+                  Bet Red
+                </button>
+                <button
+                  type="button"
+                  className={`claim blue${corner === 'blue' ? ' active' : ''}`}
+                  disabled={!open || busy}
+                  onClick={() => setCorner('blue')}
+                >
+                  Bet Blue
+                </button>
+              </div>
+              <div className="crowd-stakes">
+                {STAKE_PRESETS.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className={`ghost stake${stake === s ? ' active' : ''}`}
+                    disabled={!open || busy}
+                    onClick={() => setStake(s)}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
               <button
-                key={s}
                 type="button"
-                className={`ghost stake${stake === s ? ' active' : ''}`}
+                className="claim red wide"
                 disabled={!open || busy}
-                onClick={() => setStake(s)}
+                onClick={() => void placeBet()}
               >
-                {s}
+                {open ? `Lock ${stake} on ${corner.toUpperCase()}` : 'Book locked / closed'}
               </button>
-            ))}
+            </div>
+          )}
+
+          <div className="crowd-mods">
+            <button type="button" className="ghost" disabled={busy} onClick={() => void buyMod('cheer')}>
+              Cheer · 25
+            </button>
+            <button type="button" className="ghost" disabled={busy} onClick={() => void buyMod('banner')}>
+              Banner · 15
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={() => void buyMod('heat_flare')}
+            >
+              Heat Flare · 50
+            </button>
           </div>
-          <button
-            type="button"
-            className="claim red wide"
-            disabled={!open || busy}
-            onClick={() => void placeBet()}
-          >
-            {open ? `Lock ${stake} on ${corner.toUpperCase()}` : 'Book locked / closed'}
-          </button>
+
+          {flash && <p className="crowd-flash">{flash}</p>}
         </div>
       )}
-
-      <div className="crowd-mods">
-        <button type="button" className="ghost" disabled={busy} onClick={() => void buyMod('cheer')}>
-          Cheer · 25
-        </button>
-        <button type="button" className="ghost" disabled={busy} onClick={() => void buyMod('banner')}>
-          Banner · 15
-        </button>
-        <button
-          type="button"
-          className="ghost"
-          disabled={busy}
-          onClick={() => void buyMod('heat_flare')}
-        >
-          Heat Flare · 50
-        </button>
-      </div>
-
-      {flash && <p className="crowd-flash">{flash}</p>}
     </section>
   )
 }

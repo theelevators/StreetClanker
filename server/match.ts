@@ -81,7 +81,7 @@ const ANNOUNCER = {
     'THE CROWD IS ON ITS FEET!',
   ],
   slip: [
-    'SLIPPED IT! Pure Vegas defense.',
+    'SLIPPED IT! Pure alley defense.',
     'Airball — they danced out of range.',
     'Empty leather. The dodge was filthy.',
   ],
@@ -167,7 +167,7 @@ export class MatchEngine {
       red: blankFighter('red', 'Red Rocker'),
       blue: blankFighter('blue', 'Blue Bomber'),
       chat: [],
-      eventLog: ['BoxClub lobby open. Vegas card energy — claim a corner.'],
+      eventLog: ['StreetClanker lobby open. Alley-card energy — claim a corner.'],
       createdAt: Date.now(),
       lastImpact: null,
       activePhrases: [],
@@ -699,7 +699,7 @@ export class MatchEngine {
     const text =
       winner === 'draw'
         ? 'Judges call it a DRAW under the neon!'
-        : `${this.state[winner].name} wins the Vegas card by decision!`
+        : `${this.state[winner].name} wins the street card by decision!`
     this.pushEvent(text)
     this.pushChat({ from: 'system', name: 'Ring Announcer', text })
     this.rememberFinished()
@@ -1094,7 +1094,7 @@ export class MatchEngine {
           'That all you got?',
           'Coach said knock your block off.',
           'Beep boop — KO incoming.',
-          'Vegas loves a finisher.',
+          'The street loves a finisher.',
         ]
         this.trashTalk(key, lines[Math.floor(Math.random() * lines.length)]!)
       }

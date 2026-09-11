@@ -119,7 +119,7 @@ export interface MatchState {
   lastImpact: ImpactEvent | null
   /** Currently committed phrases playing out on the ring clock */
   activePhrases: ActivePhrase[]
-  /** Vegas card energy — crowd heat 0–100 */
+  /** Street-card energy — crowd heat 0–100 */
   cardHeat: number
   /** Live announcer call for the HUD */
   announcerLine: string | null
@@ -140,7 +140,7 @@ export interface LobbyCornerStatus {
   record: FighterRecord | null
 }
 
-/** Live lobby board for Fight Night claim → ready → ding. */
+/** Live lobby board for StreetClanker claim → ready → ding. */
 export interface LobbyStatus {
   matchId: string
   phase: FightPhase
@@ -204,7 +204,7 @@ export interface UndercardEntry {
   challengeId?: string
 }
 
-/** Live challenge board + Vegas undercard strip. */
+/** Live challenge board + street undercard strip. */
 export interface ChallengeBoard {
   open: OpenChallenge[]
   undercard: UndercardEntry[]
