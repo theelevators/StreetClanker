@@ -1,22 +1,20 @@
 import {
-  App,
+  type App,
+  type Plugin,
+  type World,
   Startup,
   Update,
   Time,
   Transform,
-  type World,
-  type Plugin,
-  type ComponentBundleItem,
-} from 'mob3'
+} from '@mob3/core'
 import {
-  ThreePlugin,
   ThreeScene,
   ThreeObject,
   ThreeCamera,
   ThreeRenderer,
 } from '@mob3/three'
 import * as THREE from 'three'
-import type { MatchState } from '../types'
+import type { Corner } from '../types'
 import {
   MatchBridge,
   FighterCorner,
@@ -25,19 +23,30 @@ import {
   ImpactFx,
   ImpactTag,
   RingTag,
+  RingFx,
   CameraShake,
 } from './components'
-import { buildImpactFx, buildRing, buildRobot } from './meshes'
+import {
+  buildImpactFx,
+  buildRing,
+  buildRobot,
+  buildDust,
+  buildHitLight,
+  collectRopes,
+} from './meshes'
 import { faceYawFor, initialAnim, stepFighterAnim, HOME_X } from './animate'
 
-export type FightAppOptions = {
-  canvas: HTMLCanvasElement
-  getState: () => MatchState | null
-}
-
-/** mob3 factories return data without the brand in TS — assert for spawn bundles. */
-function b(item: unknown): ComponentBundleItem {
-  return item as ComponentBundleItem
+/** Ring fight systems. ThreePlugin is attached by `@mob3/react`. */
+export function FightPlugin(): Plugin {
+  return {
+    build(app: App) {
+      app.addSystem(Startup, setupScene)
+      app.addSystem(Update, animateFighters)
+      app.addSystem(Update, animateImpact)
+      app.addSystem(Update, animateRingAmbience)
+      app.addSystem(Update, animateCamera)
+    },
+  }
 }
 
 function setupScene(world: World) {
@@ -66,42 +75,52 @@ function setupScene(world: World) {
   scene.add(spot)
 
   const ring = buildRing()
+  const dust = buildDust()
+  const hitLight = buildHitLight()
+  ring.add(dust)
+  ring.add(hitLight)
   scene.add(ring)
-  world.spawn(b(Transform()), b(ThreeObject(ring as unknown as THREE.Object3D)), RingTag)
+  world.spawn(
+    Transform(),
+    ThreeObject(ring),
+    RingTag,
+    RingFx({
+      ropes: collectRopes(ring),
+      dust,
+      hitLight,
+      hitPulse: 0,
+    }),
+  )
 
   for (const corner of ['red', 'blue'] as const) {
     const { root, rig } = buildRobot(corner)
     scene.add(root)
     world.spawn(
-      b(
-        Transform({
-          x: HOME_X[corner],
-          y: 0,
-          z: 0,
-          ry: faceYawFor(corner),
-        }),
-      ),
-      b(ThreeObject(root as unknown as THREE.Object3D)),
-      b(FighterCorner({ corner })),
-      b(FighterAnim(initialAnim(corner))),
-      b(FighterRig(rig)),
+      Transform({
+        x: HOME_X[corner],
+        y: 0,
+        z: 0,
+        ry: faceYawFor(corner),
+      }),
+      ThreeObject(root),
+      FighterCorner({ corner }),
+      FighterAnim(initialAnim(corner)),
+      FighterRig(rig),
     )
   }
 
   const fx = buildImpactFx()
   scene.add(fx.group)
   world.spawn(
-    b(Transform({ y: 1.1 })),
-    b(ThreeObject(fx.group as unknown as THREE.Object3D)),
+    Transform({ y: 1.1 }),
+    ThreeObject(fx.group),
     ImpactTag,
-    b(
-      ImpactFx({
-        lastId: null,
-        flash: fx.flash,
-        ring: fx.ring,
-        group: fx.group,
-      }),
-    ),
+    ImpactFx({
+      lastId: null,
+      flash: fx.flash,
+      ring: fx.ring,
+      group: fx.group,
+    }),
   )
 
   world.insertResource(CameraShake, {
@@ -114,51 +133,61 @@ function setupScene(world: World) {
 }
 
 function animateFighters(world: World) {
-  const bridge = world.resource(MatchBridge)
-  const state = bridge.getState()
+  const bridge = world.tryResource(MatchBridge)
+  const state = bridge?.getState()
   if (!state) return
   const now = Date.now()
 
-  for (const [, transform, three, corner, anim, rig] of world.query(
+  for (const [entity, , , corner, anim, rig] of world.query(
     Transform,
     ThreeObject,
     FighterCorner,
     FighterAnim,
     FighterRig,
   )) {
-    const side = corner.corner
+    const side = corner.corner as Corner
+    const fighter = state[side]
     stepFighterAnim({
       anim,
       rig,
       side,
-      fighter: state[side],
+      fighter,
       opponent: state[side === 'red' ? 'blue' : 'red'],
       phase: state.phase,
       lastImpact: state.lastImpact,
       now,
     })
-    transform.x = anim.x
-    transform.y = anim.y
-    transform.z = anim.z
-    transform.rx = anim.sway * 0.15
-    transform.ry = faceYawFor(side)
-    transform.rz = -anim.lean
-    // Apply immediately — keeps the bout responsive even if PreRender
-    // change-detection misses a field write this tick.
-    const obj = three.object
-    obj.position.set(transform.x, transform.y, transform.z)
-    obj.rotation.set(transform.rx, transform.ry, transform.rz)
+
+    // Low-HP eyes burn hotter / redder
+    const hp = Math.max(0, Math.min(1, fighter.health / 100))
+    const baseGlow = 0.55 + (1 - hp) * 1.35
+    if (rig.leftEye.emissiveIntensity < baseGlow) {
+      rig.leftEye.emissiveIntensity = baseGlow
+      rig.rightEye.emissiveIntensity = baseGlow
+    }
+    const tint = new THREE.Color().setHSL(0.02 + hp * 0.08, 0.85, 0.45 + hp * 0.15)
+    rig.leftEye.emissive.copy(tint)
+    rig.rightEye.emissive.copy(tint)
+
+    world.mutate(entity, Transform, (transform) => {
+      transform.x = anim.x
+      transform.y = anim.y
+      transform.z = anim.z
+      transform.rx = anim.sway * 0.15
+      transform.ry = faceYawFor(side)
+      transform.rz = -anim.lean
+    })
   }
 }
 
 function animateImpact(world: World) {
-  const { delta } = world.resource(Time)
-  const bridge = world.resource(MatchBridge)
-  const state = bridge.getState()
+  const time = world.resource(Time)
+  const bridge = world.tryResource(MatchBridge)
+  const state = bridge?.getState()
   const impact = state?.lastImpact ?? null
   const now = Date.now()
 
-  for (const [, transform, fx] of world.query(Transform, ImpactFx)) {
+  for (const [entity, , fx] of world.query(Transform, ImpactFx)) {
     if (impact && impact.id !== fx.lastId) {
       fx.lastId = impact.id
       const midX =
@@ -170,10 +199,12 @@ function animateImpact(world: World) {
             ? -0.02
             : 0.02
       const y = impact.result === 'blocked' ? 0.98 : 1.1
-      transform.x = midX
-      transform.y = y
-      transform.z = 0.02
-      fx.group.position.set(midX, y, 0.02)
+
+      world.mutate(entity, Transform, (transform) => {
+        transform.x = midX
+        transform.y = y
+        transform.z = 0.02
+      })
 
       fx.flash.visible = true
       fx.flash.scale.setScalar(impact.result === 'hit' ? 1.45 : 0.85)
@@ -229,6 +260,17 @@ function animateImpact(world: World) {
           : impact.result === 'blocked'
             ? 0.12
             : 0.06
+
+      for (const [, ringFx] of world.query(RingFx)) {
+        ringFx.hitPulse = impact.result === 'hit' ? 1 : 0.55
+        ringFx.hitLight.color.set(
+          impact.result === 'hit'
+            ? '#ffd27a'
+            : impact.result === 'blocked'
+              ? '#cfe0ff'
+              : '#b8ffd0',
+        )
+      }
     }
 
     const age = impact ? (now - impact.at) / 1000 : 99
@@ -254,11 +296,11 @@ function animateImpact(world: World) {
       const child = fx.group.children[i]!
       if (child === fx.flash || child === fx.ring) continue
       const mesh = child as THREE.Mesh
-      mesh.userData.life -= delta
-      mesh.userData.vy -= 4 * delta
-      mesh.position.x += mesh.userData.vx * delta
-      mesh.position.y += mesh.userData.vy * delta
-      mesh.position.z += mesh.userData.vz * delta
+      mesh.userData.life -= time.delta
+      mesh.userData.vy -= 4 * time.delta
+      mesh.position.x += mesh.userData.vx * time.delta
+      mesh.position.y += mesh.userData.vy * time.delta
+      mesh.position.z += mesh.userData.vz * time.delta
       const mat = mesh.material as THREE.MeshBasicMaterial
       mat.opacity = Math.max(0, mesh.userData.life * 2)
       if (mesh.userData.life <= 0) {
@@ -270,12 +312,44 @@ function animateImpact(world: World) {
   }
 }
 
+function animateRingAmbience(world: World) {
+  const time = world.resource(Time)
+  for (const [, fx] of world.query(RingFx)) {
+    for (let i = 0; i < fx.ropes.length; i++) {
+      const rope = fx.ropes[i]!
+      const baseY = (rope.userData.baseY as number) ?? rope.position.y
+      rope.position.y = baseY + Math.sin(time.elapsed * 1.6 + i * 0.45) * 0.012
+      rope.rotation.z = Math.sin(time.elapsed * 1.1 + i * 0.7) * 0.02
+    }
+
+    const positions = fx.dust.geometry.getAttribute('position') as THREE.BufferAttribute
+    for (let i = 0; i < positions.count; i++) {
+      let y = positions.getY(i) + time.delta * (0.05 + (i % 5) * 0.01)
+      if (y > 2.8) y = 0.35
+      positions.setY(i, y)
+      positions.setX(
+        i,
+        positions.getX(i) + Math.sin(time.elapsed * 0.4 + i) * time.delta * 0.02,
+      )
+    }
+    positions.needsUpdate = true
+
+    if (fx.hitPulse > 0.001) {
+      fx.hitLight.intensity = fx.hitPulse * 3.2
+      fx.hitPulse *= Math.pow(0.08, time.delta)
+    } else {
+      fx.hitLight.intensity = 0
+      fx.hitPulse = 0
+    }
+  }
+}
+
 function animateCamera(world: World) {
   const camera = world.resource(ThreeCamera) as unknown as THREE.PerspectiveCamera
   const shake = world.tryResource(CameraShake)
   if (!shake) return
-  const bridge = world.resource(MatchBridge)
-  const state = bridge.getState()
+  const bridge = world.tryResource(MatchBridge)
+  const state = bridge?.getState()
   const phase = state?.phase
   const fighting =
     phase === 'fighting' || phase === 'countdown' || phase === 'knockout'
@@ -298,29 +372,4 @@ function animateCamera(world: World) {
 
   camera.position.lerp(desired, 0.045)
   camera.lookAt(0, 0.75, 0)
-}
-
-export function BoxClubFightPlugin(): Plugin {
-  return {
-    build(app: App) {
-      app.addSystem(Startup, setupScene)
-      app.addSystem(Update, animateFighters)
-      app.addSystem(Update, animateImpact)
-      app.addSystem(Update, animateCamera)
-    },
-  }
-}
-
-export function createFightApp(options: FightAppOptions): App {
-  return new App()
-    .addPlugin(
-      ThreePlugin({
-        canvas: options.canvas,
-        antialias: true,
-        clearColor: 0x1c1410,
-        autoResize: true,
-      }),
-    )
-    .insertResource(MatchBridge, { getState: options.getState })
-    .addPlugin(BoxClubFightPlugin())
 }

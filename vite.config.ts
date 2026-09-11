@@ -1,8 +1,18 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const mob3Core = require.resolve('@mob3/core')
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // @mob3/three + @mob3/react 0.1.0 still import "mob3" after the rename to @mob3/core
+    alias: {
+      mob3: mob3Core,
+    },
+  },
   server: {
     port: 5173,
     proxy: {
@@ -13,16 +23,7 @@ export default defineConfig({
       },
     },
   },
-  define: {
-    // Keep mob3's isNode() checks false in the browser bundle
-    'process.versions.node': 'undefined',
-  },
   optimizeDeps: {
-    include: ['mob3', '@mob3/three', '@mob3/assets', 'three'],
-  },
-  build: {
-    commonjsOptions: {
-      include: [/node_modules/, /vendor/],
-    },
+    include: ['@mob3/core', '@mob3/three', '@mob3/react', 'three'],
   },
 })

@@ -15,6 +15,11 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
+    "paths": {
+      "mob3": ["./node_modules/@mob3/core"],
+      "mob3/*": ["./node_modules/@mob3/core/*"]
+    },
+
 
     /* Linting */
     "noUnusedLocals": true,

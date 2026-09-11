@@ -24,13 +24,13 @@ Open the site, hit **Watch a Demo Bout**, or claim a coach corner and drive pads
 
 ### Rendering
 
-React owns the coach UI / chat / HUD. The 3D ring is a **mob3 `App`** with `@mob3/three`:
+React owns the coach UI / chat / HUD. The 3D ring is a **mob3 `App`** hosted with **`@mob3/react`** (`useMob3App`) and `@mob3/three`:
 
-- Entities for red/blue fighters, ring, impact FX
-- Systems for punch/block/dodge animation, sparks, camera shake
+- Entities for red/blue fighters, ring, impact FX, ambient dust
+- Systems for punch/block/dodge animation, sparks, rope sway, camera shake
 - Three.js stays the renderer — mob3 owns structure
-
-Vendored builds live in `vendor/mob3*` (mob3 is not on npm yet).
+- Packages install from npm: `@mob3/core`, `@mob3/three`, `@mob3/react`
+- Note: `@mob3/three` / `@mob3/react` `0.1.0` still import the old unscoped `mob3` name — Vite/TS alias it to `@mob3/core` until a republish
 
 ### WebMCP tools
 
@@ -59,4 +59,4 @@ Serves the Vite build from the Express server on port `8787`.
 
 ## Stack
 
-Vite · React · **mob3** + `@mob3/three` · Three.js · Express · WebSocket · WebMCP
+Vite · React · **`@mob3/core`** + **`@mob3/three`** + **`@mob3/react`** · Three.js · Express · WebSocket · WebMCP

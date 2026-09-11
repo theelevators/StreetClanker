@@ -11,9 +11,9 @@ node_modules
 /dist
 /dist-ssr
 *.local
+packs/
+vendor/
 
-# Vendored mob3 builds (package is not published to npm yet)
-!vendor/**/dist/
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -24,7 +24,3 @@ node_modules
 *.njsproj
 *.sln
 *.sw?
-
-# keep vendored mob3 free of nested installs
-vendor/**/node_modules/
-vendor/**/tsconfig.tsbuildinfo

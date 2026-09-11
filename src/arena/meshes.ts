@@ -110,7 +110,49 @@ function addRope(
   )
   rope.position.set((from[0] + to[0]) / 2, y, (from[1] + to[1]) / 2)
   rope.rotation.y = angle
+  rope.name = 'rope'
+  rope.userData.baseY = y
   root.add(rope)
+}
+
+/** Collect rope meshes for idle sway. */
+export function collectRopes(root: THREE.Group): THREE.Object3D[] {
+  const ropes: THREE.Object3D[] = []
+  root.traverse((obj) => {
+    if (obj.name === 'rope') ropes.push(obj)
+  })
+  return ropes
+}
+
+/** Soft dust motes above the canvas. */
+export function buildDust(): THREE.Points {
+  const count = 48
+  const positions = new Float32Array(count * 3)
+  for (let i = 0; i < count; i++) {
+    positions[i * 3] = (Math.random() - 0.5) * 5
+    positions[i * 3 + 1] = 0.4 + Math.random() * 2.4
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 5
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  const mat = new THREE.PointsMaterial({
+    color: '#ffe6a8',
+    size: 0.035,
+    transparent: true,
+    opacity: 0.45,
+    depthWrite: false,
+    sizeAttenuation: true,
+  })
+  const points = new THREE.Points(geo, mat)
+  points.name = 'Dust'
+  return points
+}
+
+export function buildHitLight(): THREE.PointLight {
+  const light = new THREE.PointLight('#ffd38a', 0, 5, 2)
+  light.position.set(0, 1.4, 0)
+  light.name = 'HitLight'
+  return light
 }
 
 function addPillar(root: THREE.Group, position: [number, number, number], color: string) {

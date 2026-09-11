@@ -1,5 +1,5 @@
-import { component, resource, tag } from 'mob3'
-import type { Group, MeshStandardMaterial, Mesh } from 'three'
+import { component, resource, tag } from '@mob3/core'
+import type { Group, Mesh, MeshStandardMaterial, Object3D, Points, PointLight } from 'three'
 import type { Corner, MatchState } from '../types'
 
 /** Latest match snapshot from React / WebSocket — mutated in place each frame. */
@@ -94,6 +94,24 @@ export const ImpactFx = component<ImpactFxData>(
     group: null as unknown as Group,
   },
   'ImpactFx',
+)
+
+/** Atmosphere handles parented under the ring entity. */
+export type RingFxData = {
+  ropes: Object3D[]
+  dust: Points
+  hitLight: PointLight
+  hitPulse: number
+}
+
+export const RingFx = component<RingFxData>(
+  {
+    ropes: [],
+    dust: null as unknown as Points,
+    hitLight: null as unknown as PointLight,
+    hitPulse: 0,
+  },
+  'RingFx',
 )
 
 export type CameraShakeData = {
