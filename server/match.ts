@@ -398,6 +398,96 @@ export class MatchEngine {
     this.emit()
   }
 
+  /**
+   * Seat a matched challenge pair into the ring.
+   * Clears an idle/ended lobby; refuses if a live bout is in progress or strangers hold corners.
+   */
+  seatChallengePair(input: {
+    challengerId: string
+    challengerName: string
+    acceptorId: string
+    acceptorName: string
+    preferredCorner: Corner | 'any'
+  }) {
+    const { challengerId, challengerName, acceptorId, acceptorName, preferredCorner } = input
+    if (challengerId === acceptorId) {
+      throw new Error('You cannot accept your own challenge')
+    }
+    if (challengerId.startsWith('demo-') || acceptorId.startsWith('demo-')) {
+      throw new Error('Demo bots stay off the challenge board')
+    }
+
+    const phase = this.state.phase
+    if (phase !== 'lobby' && phase !== 'ended') {
+      throw new Error('Ring is busy — wait for the bout to finish')
+    }
+
+    const redKey = this.agentKeys.red
+    const blueKey = this.agentKeys.blue
+    const occupants = [redKey, blueKey].filter(Boolean) as string[]
+    const allowed = new Set([challengerId, acceptorId])
+    if (occupants.some((k) => !allowed.has(k))) {
+      throw new Error('Corners already claimed by other fighters')
+    }
+
+    // Fresh canvas for the matched pair
+    this.clearTimers()
+    this.coachAdvice = { red: [], blue: [] }
+    this.coverLatch = { red: 0, blue: 0 }
+    this.scoredMatchId = null
+    this.agentKeys = {}
+    this.state = this.createLobby()
+
+    let challengerCorner: Corner =
+      preferredCorner === 'blue' ? 'blue' : preferredCorner === 'red' ? 'red' : 'red'
+    // If preferred taken somehow, flip — canvas is fresh so this is just preference
+    if (preferredCorner === 'any') {
+      challengerCorner = Math.random() < 0.5 ? 'red' : 'blue'
+    }
+    const acceptorCorner: Corner = challengerCorner === 'red' ? 'blue' : 'red'
+
+    this.joinAgent(challengerId, challengerCorner, challengerName)
+    this.joinAgent(acceptorId, acceptorCorner, acceptorName)
+    this.pushChat({
+      from: 'system',
+      name: 'Ring Announcer',
+      text: `Challenge accepted! ${challengerName} vs ${acceptorName} — gloves up when you're ready.`,
+    })
+    this.emit()
+    return {
+      lobby: this.lobbyStatus(),
+      challengerCorner,
+      acceptorCorner,
+    }
+  }
+
+  ringLabel(): string {
+    const { phase, red, blue } = this.state
+    if (phase === 'lobby') {
+      if (red.connected && blue.connected) return `${red.name} vs ${blue.name} — waiting on ready`
+      if (red.connected) return `${red.name} holding RED — blue open`
+      if (blue.connected) return `${blue.name} holding BLUE — red open`
+      return 'Empty canvas · post a challenge or claim a corner'
+    }
+    if (phase === 'ended') return `Card closed · ${red.name} vs ${blue.name}`
+    return `LIVE · ${red.name} vs ${blue.name}`
+  }
+
+  ringBusy(): boolean {
+    const p = this.state.phase
+    return p !== 'lobby' && p !== 'ended'
+  }
+
+  /** Undercard ticket header for the ring slot. */
+  ringHeadline(): string {
+    const { phase, red, blue } = this.state
+    if (phase !== 'lobby' && phase !== 'ended') return 'MAIN EVENT'
+    if (phase === 'ended') return 'CARD CLOSED'
+    if (red.connected && blue.connected) return 'MATCHED'
+    if (red.connected || blue.connected) return 'CORNER HELD'
+    return 'RING OPEN'
+  }
+
   spawnDemoBots() {
     if (this.state.phase !== 'lobby') {
       this.clearTimers()

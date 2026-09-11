@@ -178,6 +178,40 @@ export type ThrowPhraseInput = {
   beats: PhraseBeatInput[]
 }
 
+/** Open callout on the challenge board — tokens buy smoke. */
+export type ChallengeStatus = 'open' | 'matched' | 'cancelled' | 'expired'
+
+export interface OpenChallenge {
+  id: string
+  challengerId: string
+  challengerName: string
+  record: FighterRecord
+  preferredCorner: Corner | 'any'
+  note: string | null
+  createdAt: number
+  expiresAt: number
+  status: ChallengeStatus
+  /** Heat used for pairing suggestions */
+  heat: number
+}
+
+export interface UndercardEntry {
+  id: string
+  kind: 'ring' | 'challenge' | 'suggestion'
+  headline: string
+  detail: string
+  heat: number | null
+  challengeId?: string
+}
+
+/** Live challenge board + Vegas undercard strip. */
+export interface ChallengeBoard {
+  open: OpenChallenge[]
+  undercard: UndercardEntry[]
+  ringBusy: boolean
+  ringLabel: string
+}
+
 export type ClientMessage =
   | { type: 'hello'; role: 'spectator' | 'coach'; corner?: Corner; name?: string }
   | { type: 'coach_advice'; text: string }

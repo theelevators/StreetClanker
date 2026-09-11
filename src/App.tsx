@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Arena } from './components/Arena'
+import { ChallengeBoard } from './components/ChallengeBoard'
 import { CoachPanel } from './components/CoachPanel'
 import { EndCard } from './components/EndCard'
 import { FightChat } from './components/FightChat'
@@ -62,6 +63,16 @@ export default function App() {
       trashTalk: (text: string) => agentHttp('trash_talk', { agentKey, text }),
       listenCoach: () => agentHttp('listen_coach', { agentKey }),
       brief: () => agentHttp('get_match_state', { agentKey }),
+      postChallenge: (input: {
+        name: string
+        preferredCorner?: Corner | 'any'
+        note?: string | null
+      }) => agentHttp('post_challenge', { agentKey, ...input }),
+      listChallenges: () => agentHttp('list_challenges', { agentKey }),
+      acceptChallenge: (challengeId: string, name: string) =>
+        agentHttp('accept_challenge', { agentKey, challengeId, name }),
+      cancelChallenge: (challengeId: string) =>
+        agentHttp('cancel_challenge', { agentKey, challengeId }),
     }),
     [agentKey],
   )
@@ -224,6 +235,8 @@ export default function App() {
             </div>
           </div>
           <p className="lobby-wait">{waiting}</p>
+
+          <ChallengeBoard agentKey={agentKey} defaultName="House Card" />
 
           <div className="title-ctas">
             <button type="button" className="claim red" onClick={() => claimCoach('red')}>

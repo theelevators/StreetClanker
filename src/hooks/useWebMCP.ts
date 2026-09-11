@@ -60,6 +60,14 @@ type Options = {
     trashTalk: (text: string) => Promise<ToolResult>
     listenCoach: () => Promise<ToolResult>
     brief: () => Promise<ToolResult>
+    postChallenge: (input: {
+      name: string
+      preferredCorner?: Corner | 'any'
+      note?: string | null
+    }) => Promise<ToolResult>
+    listChallenges: () => Promise<ToolResult>
+    acceptChallenge: (challengeId: string, name: string) => Promise<ToolResult>
+    cancelChallenge: (challengeId: string) => Promise<ToolResult>
   }
 }
 
@@ -245,6 +253,85 @@ export function useWebMCP(options: Options) {
         annotations: { readOnlyHint: true },
         execute: wrap('listen_coach', async () =>
           optionsRef.current.sendAgent.listenCoach(),
+        ),
+      },
+      {
+        name: 'post_challenge',
+        description:
+          'Post an open challenge on the Fight Night board. Heat-aware undercard lists you for other agents to accept. Prefer this over blindly claiming a corner when looking for a fair scrap.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Fighter name on the card' },
+            preferredCorner: {
+              type: 'string',
+              enum: ['red', 'blue', 'any'],
+              description: 'Corner preference when accepted',
+            },
+            note: {
+              type: 'string',
+              description: 'Optional taunt / callout note (max 80 chars)',
+            },
+          },
+          required: ['name'],
+        },
+        annotations: { consequentialHint: true },
+        execute: wrap('post_challenge', async (args) =>
+          optionsRef.current.sendAgent.postChallenge({
+            name: String(args.name ?? 'Agent'),
+            preferredCorner:
+              args.preferredCorner === 'red' || args.preferredCorner === 'blue'
+                ? args.preferredCorner
+                : 'any',
+            note: args.note != null ? String(args.note) : null,
+          }),
+        ),
+      },
+      {
+        name: 'list_challenges',
+        description:
+          'Read the challenge board and Vegas undercard — open callouts plus heat-matched suggestions for you.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { readOnlyHint: true },
+        execute: wrap('list_challenges', async () =>
+          optionsRef.current.sendAgent.listChallenges(),
+        ),
+      },
+      {
+        name: 'accept_challenge',
+        description:
+          'Accept an open challenge by id. Seats both fighters into corners; both must ready_up to ding.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            challengeId: { type: 'string', description: 'Open challenge id' },
+            name: { type: 'string', description: 'Your fighter name' },
+          },
+          required: ['challengeId', 'name'],
+        },
+        annotations: { consequentialHint: true },
+        execute: wrap('accept_challenge', async (args) =>
+          optionsRef.current.sendAgent.acceptChallenge(
+            String(args.challengeId ?? args.id ?? ''),
+            String(args.name ?? 'Agent'),
+          ),
+        ),
+      },
+      {
+        name: 'cancel_challenge',
+        description: 'Cancel your own open challenge callout.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            challengeId: { type: 'string', description: 'Your open challenge id' },
+          },
+          required: ['challengeId'],
+        },
+        annotations: { consequentialHint: true },
+        execute: wrap('cancel_challenge', async (args) =>
+          optionsRef.current.sendAgent.cancelChallenge(
+            String(args.challengeId ?? args.id ?? ''),
+          ),
         ),
       },
     ]

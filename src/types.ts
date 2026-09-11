@@ -1,6 +1,7 @@
 export type {
   ActivePhrase,
   BoutResult,
+  ChallengeBoard,
   ChatMessage,
   ClientMessage,
   CoachAdvice,
@@ -14,10 +15,12 @@ export type {
   ImpactResult,
   LobbyStatus,
   MatchState,
+  OpenChallenge,
   PhraseBeat,
   PhraseBeatInput,
   PhraseMove,
   PhraseStyle,
   ServerMessage,
   ThrowPhraseInput,
+  UndercardEntry,
 } from '../shared/types.ts'

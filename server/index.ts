@@ -12,6 +12,7 @@ import type {
   PhraseStyle,
   ServerMessage,
 } from '../shared/types.ts'
+import { challengeStore } from './challengeStore.ts'
 import { MatchEngine } from './match.ts'
 import { fighterStore } from './fighterStore.ts'
 
@@ -97,6 +98,98 @@ app.post('/api/rematch', (_req, res) => {
   }
 })
 
+function challengeBoard(viewerId?: string | null) {
+  return challengeStore.board({
+    ringBusy: engine.ringBusy(),
+    ringLabel: engine.ringLabel(),
+    ringHeadline: engine.ringHeadline(),
+    viewerId: viewerId ?? null,
+  })
+}
+
+app.get('/api/challenges', (req, res) => {
+  const viewerId = req.query.viewer ? String(req.query.viewer) : null
+  res.json(challengeBoard(viewerId))
+})
+
+app.post('/api/challenges', (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>
+    const agentKey = String(body.agentKey ?? '')
+    const name = String(body.name ?? 'Agent')
+    if (!agentKey) {
+      res.status(400).json({ error: 'agentKey required' })
+      return
+    }
+    const preferredCorner =
+      body.preferredCorner === 'red' || body.preferredCorner === 'blue'
+        ? body.preferredCorner
+        : 'any'
+    const challenge = challengeStore.post({
+      agentKey,
+      name,
+      preferredCorner,
+      note: body.note != null ? String(body.note) : null,
+    })
+    res.json({ ok: true, challenge, board: challengeBoard(agentKey) })
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Post failed' })
+  }
+})
+
+app.post('/api/challenges/:id/accept', (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>
+    const agentKey = String(body.agentKey ?? '')
+    const name = String(body.name ?? 'Agent')
+    if (!agentKey) {
+      res.status(400).json({ error: 'agentKey required' })
+      return
+    }
+    const challenge = challengeStore.get(String(req.params.id))
+    if (!challenge || challenge.status !== 'open') {
+      res.status(404).json({ error: 'Challenge not found or already closed' })
+      return
+    }
+    if (challenge.challengerId === agentKey) {
+      res.status(400).json({ error: 'You cannot accept your own challenge' })
+      return
+    }
+    const seated = engine.seatChallengePair({
+      challengerId: challenge.challengerId,
+      challengerName: challenge.challengerName,
+      acceptorId: agentKey,
+      acceptorName: name,
+      preferredCorner: challenge.preferredCorner,
+    })
+    challengeStore.markMatched(challenge.id, agentKey)
+    res.json({
+      ok: true,
+      challengeId: challenge.id,
+      ...seated,
+      state: engine.getState(),
+      board: challengeBoard(agentKey),
+    })
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Accept failed' })
+  }
+})
+
+app.post('/api/challenges/:id/cancel', (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>
+    const agentKey = String(body.agentKey ?? '')
+    if (!agentKey) {
+      res.status(400).json({ error: 'agentKey required' })
+      return
+    }
+    const challenge = challengeStore.cancel(String(req.params.id), agentKey)
+    res.json({ ok: true, challenge, board: challengeBoard(agentKey) })
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Cancel failed' })
+  }
+})
+
 app.get('/api/tools', (_req, res) => {
   res.json({
     protocol: 'WebMCP',
@@ -140,6 +233,24 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'listen_coach',
         description: 'Read the latest advice from your human coach.',
+      },
+      {
+        name: 'post_challenge',
+        description:
+          'Post an open challenge on the Fight Night board. Heat-aware undercard lists you for other agents to accept.',
+      },
+      {
+        name: 'list_challenges',
+        description: 'Read the challenge board + Vegas undercard (open callouts and heat matches).',
+      },
+      {
+        name: 'accept_challenge',
+        description:
+          'Accept an open challenge by id. Seats both fighters into corners; then both ready_up to ding.',
+      },
+      {
+        name: 'cancel_challenge',
+        description: 'Cancel your own open challenge callout.',
       },
     ],
   })
@@ -244,6 +355,56 @@ app.post('/api/agent/:action', (req, res) => {
       case 'listen_coach': {
         const advice = engine.listenCoach(agentKey)
         res.json({ ok: true, advice })
+        return
+      }
+      case 'post_challenge': {
+        const preferredCorner =
+          body.preferredCorner === 'red' || body.preferredCorner === 'blue'
+            ? body.preferredCorner
+            : 'any'
+        const challenge = challengeStore.post({
+          agentKey,
+          name: String(body.name ?? 'Agent'),
+          preferredCorner,
+          note: body.note != null ? String(body.note) : null,
+        })
+        res.json({ ok: true, challenge, board: challengeBoard(agentKey) })
+        return
+      }
+      case 'list_challenges': {
+        res.json({ ok: true, board: challengeBoard(agentKey) })
+        return
+      }
+      case 'accept_challenge': {
+        const challengeId = String(body.challengeId ?? body.id ?? '')
+        const challenge = challengeStore.get(challengeId)
+        if (!challenge || challenge.status !== 'open') {
+          throw new Error('Challenge not found or already closed')
+        }
+        if (challenge.challengerId === agentKey) {
+          throw new Error('You cannot accept your own challenge')
+        }
+        const seated = engine.seatChallengePair({
+          challengerId: challenge.challengerId,
+          challengerName: challenge.challengerName,
+          acceptorId: agentKey,
+          acceptorName: String(body.name ?? 'Agent'),
+          preferredCorner: challenge.preferredCorner,
+        })
+        challengeStore.markMatched(challenge.id, agentKey)
+        res.json({
+          ok: true,
+          challengeId: challenge.id,
+          ...seated,
+          state: engine.getState(),
+          board: challengeBoard(agentKey),
+        })
+        return
+      }
+      case 'cancel_challenge': {
+        const challengeId = String(body.challengeId ?? body.id ?? '')
+        const challenge = challengeStore.cancel(challengeId, agentKey)
+        res.json({ ok: true, challenge, board: challengeBoard(agentKey) })
         return
       }
       default:
