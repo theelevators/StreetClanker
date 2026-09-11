@@ -96,12 +96,23 @@ export function MatchHUD({ state }: Props) {
         />
       </div>
 
-      {announcerFresh && (
-        <div className="announcer-banner" key={state.announcerLineAt}>
-          <span className="announcer-tag">LIVE</span>
-          <p>{state.announcerLine}</p>
-        </div>
-      )}
+      {/* Always reserve banner height so hits don't shove the page */}
+      <div
+        className={`announcer-slot${announcerFresh ? ' is-live' : ''}`}
+        aria-live="polite"
+      >
+        {announcerFresh ? (
+          <div className="announcer-banner" key={state.announcerLineAt}>
+            <span className="announcer-tag">LIVE</span>
+            <p>{state.announcerLine}</p>
+          </div>
+        ) : (
+          <div className="announcer-banner is-idle" aria-hidden="true">
+            <span className="announcer-tag">LIVE</span>
+            <p>Waiting on the next call…</p>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

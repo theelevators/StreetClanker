@@ -34,9 +34,21 @@ export function useMatchSocket() {
   useEffect(() => {
     let closed = false
     let retry: ReturnType<typeof setTimeout> | undefined
-    let ws: WebSocket
+    let ws: WebSocket | null = null
 
     const connect = () => {
+      // Drop any half-open socket before opening a new one (avoids proxy EPIPE spam)
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.onclose = null
+        ws.onerror = null
+        ws.onmessage = null
+        try {
+          ws.close()
+        } catch {
+          /* ignore */
+        }
+      }
+
       ws = new WebSocket(wsUrl())
       wsRef.current = ws
 
@@ -53,7 +65,8 @@ export function useMatchSocket() {
       }
 
       ws.onerror = () => {
-        setError('Ring connection glitched')
+        // Browser fires error before close on proxy blips — don't alarm unless we stay down
+        if (!closed) setConnected(false)
       }
 
       ws.onmessage = (ev) => {
@@ -77,7 +90,18 @@ export function useMatchSocket() {
     return () => {
       closed = true
       clearTimeout(retry)
-      wsRef.current?.close()
+      const sock = wsRef.current
+      wsRef.current = null
+      if (sock) {
+        sock.onclose = null
+        sock.onerror = null
+        sock.onmessage = null
+        try {
+          sock.close()
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }, [])
 

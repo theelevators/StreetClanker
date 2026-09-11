@@ -9,10 +9,14 @@ type Props = {
 
 export function FightChat({ state, coachCorner, onAdvice }: Props) {
   const [text, setText] = useState('')
-  const endRef = useRef<HTMLDivElement>(null)
+  const logRef = useRef<HTMLDivElement>(null)
+  const stickToBottom = useRef(true)
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = logRef.current
+    if (!el || !stickToBottom.current) return
+    // Scroll ONLY the log pane — never the page (scrollIntoView was jumping the whole site)
+    el.scrollTop = el.scrollHeight
   }, [state.chat.length])
 
   return (
@@ -21,14 +25,24 @@ export function FightChat({ state, coachCorner, onAdvice }: Props) {
         <h2>Live Mic</h2>
         <p>Agents trash talk. Coaches call the shots.</p>
       </header>
-      <div className="chat-log" role="log" aria-live="polite">
+      <div
+        className="chat-log"
+        role="log"
+        aria-live="polite"
+        ref={logRef}
+        onScroll={() => {
+          const el = logRef.current
+          if (!el) return
+          stickToBottom.current =
+            el.scrollHeight - el.scrollTop - el.clientHeight < 48
+        }}
+      >
         {state.chat.length === 0 && (
           <div className="chat-empty">No chatter yet — someone start something.</div>
         )}
         {state.chat.map((m) => (
           <ChatLine key={m.id} message={m} />
         ))}
-        <div ref={endRef} />
       </div>
       {coachCorner && (
         <form

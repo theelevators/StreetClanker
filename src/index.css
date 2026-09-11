@@ -33,6 +33,7 @@ body,
 }
 
 body {
+  overflow-anchor: none;
   min-height: 100vh;
   background:
     radial-gradient(ellipse 80% 50% at 50% -10%, rgba(232, 185, 35, 0.22), transparent 55%),
@@ -217,6 +218,7 @@ code {
   grid-template-rows: auto auto 1fr auto;
   gap: 0.75rem;
   padding: 0.85rem 1rem 1rem;
+  overflow-anchor: none;
 }
 
 .topbar {
@@ -263,6 +265,12 @@ code {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+  overflow-anchor: none;
+}
+
+.announcer-slot {
+  min-height: 3.1rem;
+  overflow-anchor: none;
 }
 
 .announcer-banner {
@@ -275,6 +283,14 @@ code {
   background:
     linear-gradient(90deg, rgba(232, 185, 35, 0.18), rgba(28, 20, 14, 0.7) 35%, rgba(226, 59, 47, 0.12));
   animation: announcer-in 0.45s ease-out;
+}
+
+.announcer-banner.is-idle {
+  opacity: 0;
+  animation: none;
+  pointer-events: none;
+  border-color: transparent;
+  background: transparent;
 }
 
 .announcer-banner p {
@@ -841,15 +857,19 @@ code {
   grid-template-rows: auto 1fr auto;
   min-height: 240px;
   max-height: 320px;
+  overflow-anchor: none;
 }
 
 .chat-log {
   overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
   margin: 0.7rem 0;
   padding-right: 0.25rem;
+  min-height: 0;
 }
 
 .chat-empty {
