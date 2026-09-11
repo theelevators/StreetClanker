@@ -577,12 +577,14 @@ export class MatchEngine {
       attacker.lastAction = move
       attacker.lastActionAt = beat.at
       attacker.guard = Math.min(100, attacker.guard + (move === 'block' ? 55 : 25))
-      // brief cover window while the defense beat is live
-      attacker.covering = true
-      this.later(move === 'dodge' ? 320 : 400, () => {
-        if (attacker.lastActionAt === beat.at) attacker.covering = false
-        this.emit()
-      })
+      // Block turtles into cover; dodge stays a slip (anim can read lastAction)
+      if (move === 'block') {
+        attacker.covering = true
+        this.later(400, () => {
+          if (attacker.lastActionAt === beat.at) attacker.covering = false
+          this.emit()
+        })
+      }
       this.pushEvent(
         move === 'block'
           ? `${attacker.name} gloves up`

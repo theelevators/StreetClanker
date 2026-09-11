@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import type { FighterPublic, FightPhase, MatchState } from '../types'
+import { useEffect, useRef, useState } from 'react'
+import type { ActivePhrase, FighterPublic, FightPhase, MatchState } from '../types'
 
 type Props = {
   state: MatchState
@@ -7,10 +7,24 @@ type Props = {
 
 export function MatchHUD({ state }: Props) {
   const [, setTick] = useState(0)
+  const prevHeat = useRef(state.cardHeat ?? 0)
+  const [heatSpike, setHeatSpike] = useState(false)
+
   useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 200)
+    const id = setInterval(() => setTick((n) => n + 1), 100)
     return () => clearInterval(id)
   }, [])
+
+  useEffect(() => {
+    const heat = state.cardHeat ?? 0
+    if (heat - prevHeat.current >= 4) {
+      setHeatSpike(true)
+      const t = window.setTimeout(() => setHeatSpike(false), 480)
+      prevHeat.current = heat
+      return () => window.clearTimeout(t)
+    }
+    prevHeat.current = heat
+  }, [state.cardHeat, state.announcerLineAt])
 
   const label = phaseLabel(state.phase, state)
   const remaining =
@@ -27,11 +41,24 @@ export function MatchHUD({ state }: Props) {
 
   const heat = Math.max(0, Math.min(100, state.cardHeat ?? 0))
   const phrases = state.activePhrases ?? []
+  const impactFresh =
+    state.lastImpact && Date.now() - state.lastImpact.at < 380
+      ? state.lastImpact
+      : null
 
   return (
-    <div className="hud-stack">
+    <div
+      className={`hud-stack${impactFresh?.result === 'hit' ? ' hud-hit-flash' : ''}${
+        heatSpike ? ' hud-heat-spike' : ''
+      }`}
+    >
       <div className="hud">
-        <FighterMeter fighter={state.red} align="left" phrases={phrases} />
+        <FighterMeter
+          fighter={state.red}
+          align="left"
+          phrases={phrases}
+          impact={impactFresh}
+        />
         <div className="hud-center">
           <div className="hud-round">
             {state.phase === 'lobby'
@@ -48,7 +75,9 @@ export function MatchHUD({ state }: Props) {
             </div>
           )}
           <div
-            className="card-heat"
+            className={`card-heat${heat >= 70 ? ' card-heat-hot' : ''}${
+              heatSpike ? ' card-heat-spike' : ''
+            }`}
             style={{ ['--heat' as string]: `${heat}%` }}
             aria-label={`Card heat ${Math.round(heat)}`}
           >
@@ -59,7 +88,12 @@ export function MatchHUD({ state }: Props) {
             <span className="card-heat-val">{Math.round(heat)}</span>
           </div>
         </div>
-        <FighterMeter fighter={state.blue} align="right" phrases={phrases} />
+        <FighterMeter
+          fighter={state.blue}
+          align="right"
+          phrases={phrases}
+          impact={impactFresh}
+        />
       </div>
 
       {announcerFresh && (
@@ -76,36 +110,86 @@ function FighterMeter({
   fighter,
   align,
   phrases,
+  impact,
 }: {
   fighter: FighterPublic
   align: 'left' | 'right'
-  phrases: MatchState['activePhrases']
+  phrases: ActivePhrase[]
+  impact: MatchState['lastImpact']
 }) {
+  const now = Date.now()
   const phrase = phrases.find((p) => p.corner === fighter.corner)
-  const telegraph = phrase
-    ? phrase.beats
-        .filter((_, i) => !phrase.resolved.includes(i))
-        .map((b) => shortMove(b.move))
-        .join(' · ')
-    : null
+  const windowMs =
+    fighter.nextWindowAt != null ? Math.max(0, fighter.nextWindowAt - now) : null
+  const windowOpen =
+    !fighter.covering &&
+    !phrase &&
+    (windowMs == null || windowMs <= 160)
+
+  const gotHit =
+    impact &&
+    impact.defender === fighter.corner &&
+    impact.result === 'hit'
+  const slipped =
+    impact &&
+    impact.defender === fighter.corner &&
+    impact.result === 'dodged'
+
+  let status = 'OPEN'
+  if (fighter.knockedOut) status = 'DOWN'
+  else if (fighter.covering) status = 'COVER'
+  else if (phrase) status = phrase.style.toUpperCase()
+  else if (windowOpen && fighter.connected) status = 'WINDOW'
+  else if (fighter.connected) status = fighter.ready ? 'READY' : 'LIVE'
 
   return (
-    <div className={`meter meter-${align} meter-${fighter.corner}`}>
+    <div
+      className={`meter meter-${align} meter-${fighter.corner}${
+        gotHit ? ' meter-hit' : ''
+      }${slipped ? ' meter-slip' : ''}${fighter.covering ? ' meter-cover' : ''}`}
+    >
       <div className="meter-name">
         <span>{fighter.name}</span>
-        <span className="meter-status">
-          {fighter.covering
-            ? 'COVER'
-            : fighter.connected
-              ? fighter.ready
-                ? 'READY'
-                : 'LIVE'
-              : 'OPEN'}
-        </span>
+        <span className={`meter-status status-${status.toLowerCase()}`}>{status}</span>
       </div>
       <Bar label="HP" value={fighter.health} tone="health" />
       <Bar label="STM" value={fighter.stamina} tone="stamina" />
-      {telegraph && <div className="phrase-telegraph">{telegraph}</div>}
+
+      {phrase ? (
+        <div className={`phrase-telegraph style-${phrase.style}`}>
+          <span className="phrase-style">{phrase.style}</span>
+          <div className="phrase-beats">
+            {phrase.beats.map((beat, i) => {
+              const resolved = phrase.resolved.includes(i)
+              const next =
+                !resolved && phrase.resolved.length === i
+              const eta = Math.max(0, beat.at - now)
+              return (
+                <span
+                  key={`${phrase.id}-${i}`}
+                  className={`phrase-beat${resolved ? ' is-resolved' : ''}${
+                    next ? ' is-next' : ''
+                  }`}
+                  style={
+                    next
+                      ? { ['--beat-eta' as string]: `${Math.min(1, eta / 320)}` }
+                      : undefined
+                  }
+                >
+                  {shortMove(beat.move)}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      ) : windowMs != null && windowMs > 0 && fighter.connected ? (
+        <div className="window-countdown">
+          WINDOW {Math.ceil(windowMs / 100) / 10}s
+        </div>
+      ) : windowOpen && fighter.connected ? (
+        <div className="window-open">THROW IT</div>
+      ) : null}
+
       {fighter.knockedOut && <div className="ko-tag">BLOCK POPPED</div>}
     </div>
   )

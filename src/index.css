@@ -348,21 +348,142 @@ code {
 
 .phrase-telegraph {
   margin-top: 0.4rem;
-  font-family: var(--font-display);
-  letter-spacing: 0.12em;
-  font-size: 0.95rem;
-  color: var(--yellow-hot);
-  animation: telegraph-pulse 0.9s ease-in-out infinite alternate;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
-@keyframes telegraph-pulse {
-  from {
-    opacity: 0.65;
-  }
-  to {
-    opacity: 1;
-  }
+.phrase-style {
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 214, 90, 0.7);
 }
+
+.phrase-beats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+}
+
+.phrase-beat {
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+  color: rgba(255, 242, 200, 0.55);
+  border: 1px solid rgba(255, 214, 90, 0.2);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.phrase-beat.is-next {
+  color: var(--yellow-hot);
+  border-color: rgba(255, 214, 90, 0.65);
+  background: rgba(255, 214, 90, 0.12);
+  animation: beat-prime 0.35s ease-in-out infinite alternate;
+  transform: scale(1.06);
+}
+
+.phrase-beat.is-resolved {
+  color: rgba(255, 242, 200, 0.28);
+  border-color: transparent;
+  text-decoration: line-through;
+}
+
+.style-aggressive .phrase-style { color: #ff8b6a; }
+.style-showboat .phrase-style { color: #ffd65a; }
+.style-counter .phrase-style { color: #8ec8ff; }
+.style-pressure .phrase-style { color: #ffc978; }
+
+@keyframes beat-prime {
+  from { box-shadow: 0 0 0 rgba(255, 214, 90, 0); }
+  to { box-shadow: 0 0 12px rgba(255, 214, 90, 0.35); }
+}
+
+.window-countdown,
+.window-open {
+  margin-top: 0.35rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.12em;
+  font-size: 0.85rem;
+}
+
+.window-countdown {
+  color: rgba(255, 220, 160, 0.55);
+}
+
+.window-open {
+  color: var(--yellow-hot);
+  animation: telegraph-pulse 0.7s ease-in-out infinite alternate;
+}
+
+.meter-hit {
+  animation: meter-shake 0.35s ease-out;
+}
+
+.meter-slip {
+  animation: meter-slip 0.4s ease-out;
+}
+
+.meter-cover .meter-status {
+  color: #9ec0ff;
+}
+
+.status-window {
+  color: var(--yellow-hot) !important;
+  animation: live-blink 0.9s steps(2, end) infinite;
+}
+
+.status-cover {
+  color: #9ec0ff !important;
+}
+
+.status-aggressive,
+.status-showboat,
+.status-counter,
+.status-pressure {
+  color: var(--yellow-hot) !important;
+}
+
+@keyframes meter-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+
+@keyframes meter-slip {
+  0%, 100% { transform: translateX(0); }
+  40% { transform: translateX(5px); }
+}
+
+.hud-hit-flash .hud {
+  animation: hud-punch 0.28s ease-out;
+}
+
+@keyframes hud-punch {
+  0% { filter: brightness(1.25); }
+  100% { filter: brightness(1); }
+}
+
+.card-heat-hot .card-heat-fill {
+  background: linear-gradient(90deg, #a85a12, #ffd65a, #fff4c2);
+}
+
+.card-heat-spike .card-heat-val {
+  animation: heat-pop 0.45s ease-out;
+}
+
+.hud-heat-spike .card-heat-track {
+  box-shadow: 0 0 16px rgba(255, 214, 90, 0.35);
+}
+
+@keyframes heat-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.25); color: #fff; }
+  100% { transform: scale(1); }
+}
+
 
 .hud-center {
   text-align: center;

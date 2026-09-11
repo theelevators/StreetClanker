@@ -155,6 +155,8 @@ function animateFighters(world: World) {
       opponent: state[side === 'red' ? 'blue' : 'red'],
       phase: state.phase,
       lastImpact: state.lastImpact,
+      activePhrases: state.activePhrases,
+      cardHeat: state.cardHeat,
       now,
     })
 
@@ -190,15 +192,17 @@ function animateImpact(world: World) {
   for (const [entity, , fx] of world.query(Transform, ImpactFx)) {
     if (impact && impact.id !== fx.lastId) {
       fx.lastId = impact.id
-      const midX =
+      const contact =
         impact.result === 'dodged'
           ? impact.defender === 'red'
-            ? -0.4
-            : 0.4
+            ? -0.42
+            : 0.42
           : impact.attacker === 'red'
-            ? -0.02
-            : 0.02
-      const y = impact.result === 'blocked' ? 0.98 : 1.1
+            ? 0.08
+            : -0.08
+      const midX = contact
+      const y = impact.result === 'blocked' ? 0.98 : impact.result === 'hit' ? 1.12 : 1.05
+      const power = Math.min(1.6, 0.7 + impact.damage / 14)
 
       world.mutate(entity, Transform, (transform) => {
         transform.x = midX
@@ -207,7 +211,9 @@ function animateImpact(world: World) {
       })
 
       fx.flash.visible = true
-      fx.flash.scale.setScalar(impact.result === 'hit' ? 1.45 : 0.85)
+      fx.flash.scale.setScalar(
+        (impact.result === 'hit' ? 1.55 : impact.result === 'blocked' ? 1.05 : 0.75) * power,
+      )
       const flashMat = fx.flash.material as THREE.MeshBasicMaterial
       flashMat.color.set(
         impact.result === 'hit'
@@ -233,21 +239,40 @@ function animateImpact(world: World) {
       }
 
       if (impact.result !== 'dodged') {
-        const count = impact.result === 'hit' ? 14 : 8
+        const count = Math.round((impact.result === 'hit' ? 16 : 9) * power)
         for (let i = 0; i < count; i++) {
           const mesh = new THREE.Mesh(
-            new THREE.BoxGeometry(0.04, 0.04, 0.04),
+            new THREE.BoxGeometry(0.035, 0.035, 0.035),
             new THREE.MeshBasicMaterial({
-              color: '#ffe29a',
+              color: impact.result === 'hit' ? '#ffe29a' : '#d7e6ff',
               transparent: true,
               opacity: 1,
               depthWrite: false,
             }),
           )
-          mesh.userData.vx = (Math.random() - 0.5) * 4
-          mesh.userData.vy = Math.random() * 3
-          mesh.userData.vz = (Math.random() - 0.5) * 4
-          mesh.userData.life = 0.35 + Math.random() * 0.25
+          const burst = 3.2 * power
+          mesh.userData.vx = (Math.random() - 0.5) * burst
+          mesh.userData.vy = Math.random() * 2.8 * power
+          mesh.userData.vz = (Math.random() - 0.5) * burst
+          mesh.userData.life = 0.32 + Math.random() * 0.3
+          fx.group.add(mesh)
+        }
+      } else {
+        // Slip sparkle — green glitter without a thud
+        for (let i = 0; i < 6; i++) {
+          const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(0.03, 0.03, 0.03),
+            new THREE.MeshBasicMaterial({
+              color: '#b8ffd0',
+              transparent: true,
+              opacity: 0.9,
+              depthWrite: false,
+            }),
+          )
+          mesh.userData.vx = (Math.random() - 0.5) * 2
+          mesh.userData.vy = Math.random() * 1.8
+          mesh.userData.vz = (Math.random() - 0.5) * 2
+          mesh.userData.life = 0.25 + Math.random() * 0.2
           fx.group.add(mesh)
         }
       }
@@ -256,13 +281,13 @@ function animateImpact(world: World) {
       shake.lastImpactId = impact.id
       shake.shake =
         impact.result === 'hit'
-          ? Math.min(0.55, 0.18 + impact.damage / 40)
+          ? Math.min(0.7, 0.2 + impact.damage / 32)
           : impact.result === 'blocked'
-            ? 0.12
-            : 0.06
+            ? 0.14
+            : 0.08
 
       for (const [, ringFx] of world.query(RingFx)) {
-        ringFx.hitPulse = impact.result === 'hit' ? 1 : 0.55
+        ringFx.hitPulse = impact.result === 'hit' ? 1.15 * power : impact.result === 'blocked' ? 0.7 : 0.4
         ringFx.hitLight.color.set(
           impact.result === 'hit'
             ? '#ffd27a'
@@ -314,31 +339,38 @@ function animateImpact(world: World) {
 
 function animateRingAmbience(world: World) {
   const time = world.resource(Time)
+  const bridge = world.tryResource(MatchBridge)
+  const heat = bridge?.getState()?.cardHeat ?? 0
+  const heatGlow = heat / 100
+
   for (const [, fx] of world.query(RingFx)) {
     for (let i = 0; i < fx.ropes.length; i++) {
       const rope = fx.ropes[i]!
       const baseY = (rope.userData.baseY as number) ?? rope.position.y
-      rope.position.y = baseY + Math.sin(time.elapsed * 1.6 + i * 0.45) * 0.012
-      rope.rotation.z = Math.sin(time.elapsed * 1.1 + i * 0.7) * 0.02
+      const amp = 0.012 + heatGlow * 0.02 + fx.hitPulse * 0.035
+      rope.position.y =
+        baseY + Math.sin(time.elapsed * (1.6 + heatGlow * 0.8) + i * 0.45) * amp
+      rope.rotation.z =
+        Math.sin(time.elapsed * 1.1 + i * 0.7) * (0.02 + heatGlow * 0.03 + fx.hitPulse * 0.04)
     }
 
     const positions = fx.dust.geometry.getAttribute('position') as THREE.BufferAttribute
     for (let i = 0; i < positions.count; i++) {
-      let y = positions.getY(i) + time.delta * (0.05 + (i % 5) * 0.01)
+      let y = positions.getY(i) + time.delta * (0.05 + (i % 5) * 0.01 + heatGlow * 0.03)
       if (y > 2.8) y = 0.35
       positions.setY(i, y)
       positions.setX(
         i,
-        positions.getX(i) + Math.sin(time.elapsed * 0.4 + i) * time.delta * 0.02,
+        positions.getX(i) + Math.sin(time.elapsed * 0.4 + i) * time.delta * (0.02 + heatGlow * 0.02),
       )
     }
     positions.needsUpdate = true
 
     if (fx.hitPulse > 0.001) {
-      fx.hitLight.intensity = fx.hitPulse * 3.2
-      fx.hitPulse *= Math.pow(0.08, time.delta)
+      fx.hitLight.intensity = fx.hitPulse * (3.4 + heatGlow * 2.2)
+      fx.hitPulse *= Math.pow(0.07, time.delta)
     } else {
-      fx.hitLight.intensity = 0
+      fx.hitLight.intensity = heatGlow * 0.4
       fx.hitPulse = 0
     }
   }
@@ -354,22 +386,52 @@ function animateCamera(world: World) {
   const fighting =
     phase === 'fighting' || phase === 'countdown' || phase === 'knockout'
   const t = world.resource(Time).elapsed
+  const heat = state?.cardHeat ?? 0
+  const heatKick = fighting ? heat / 100 : 0
 
-  const orbit = fighting ? 0.08 * Math.sin(t * 0.35) : 0
-  const zoom = phase === 'knockout' ? 0.35 : phase === 'fighting' ? 0.12 : 0
+  // Soft pocket tracking from fighter transforms
+  let lookX = 0
+  let spread = 1.5
+  const xs: number[] = []
+  for (const [, , , corner, anim] of world.query(
+    Transform,
+    ThreeObject,
+    FighterCorner,
+    FighterAnim,
+  )) {
+    void corner
+    xs.push(anim.x)
+  }
+  if (xs.length === 2) {
+    lookX = (xs[0]! + xs[1]!) / 2
+    spread = Math.abs(xs[0]! - xs[1]!)
+  }
+
+  const orbit = fighting ? 0.1 * Math.sin(t * 0.38) + heatKick * 0.04 * Math.sin(t * 1.5) : 0
+  const zoom =
+    phase === 'knockout'
+      ? 0.42
+      : phase === 'fighting'
+        ? 0.14 + heatKick * 0.2 + Math.max(0, 1.4 - spread) * 0.06
+        : 0
 
   const desired = new THREE.Vector3(shake.baseX, shake.baseY, shake.baseZ)
     .applyAxisAngle(new THREE.Vector3(0, 1, 0), orbit)
     .multiplyScalar(1 - zoom * 0.08)
-  if (phase === 'knockout') desired.y += 0.25
+  desired.x += lookX * 0.18
+  if (phase === 'knockout') desired.y += 0.3
 
   if (shake.shake > 0.001) {
     desired.x += (Math.random() - 0.5) * shake.shake
-    desired.y += (Math.random() - 0.5) * shake.shake * 0.6
+    desired.y += (Math.random() - 0.5) * shake.shake * 0.65
     desired.z += (Math.random() - 0.5) * shake.shake
-    shake.shake *= 0.86
+    shake.shake *= 0.84
   }
 
-  camera.position.lerp(desired, 0.045)
-  camera.lookAt(0, 0.75, 0)
+  const wantFov = fighting ? 42 - heatKick * 16 : 42
+  camera.fov = THREE.MathUtils.lerp(camera.fov ?? 42, wantFov, 0.05)
+  camera.updateProjectionMatrix()
+
+  camera.position.lerp(desired, 0.05)
+  camera.lookAt(lookX * 0.4, 0.72 + Math.max(0, 1.4 - spread) * 0.05, 0)
 }
