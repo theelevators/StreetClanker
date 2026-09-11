@@ -1,5 +1,6 @@
 export type {
   ActivePhrase,
+  BoutResult,
   ChatMessage,
   ClientMessage,
   CoachAdvice,
@@ -9,6 +10,7 @@ export type {
   FighterPublic,
   ImpactEvent,
   ImpactResult,
+  LobbyStatus,
   MatchState,
   PhraseBeat,
   PhraseBeatInput,

@@ -210,6 +210,249 @@ code {
   text-transform: uppercase;
 }
 
+.title-main.fight-night {
+  max-width: 780px;
+}
+
+.lobby-board {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.75rem;
+  align-items: stretch;
+  margin: 0 auto 0.85rem;
+  max-width: 34rem;
+}
+
+.lobby-corner {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid rgba(255, 220, 140, 0.16);
+  border-radius: 4px;
+  background: rgba(14, 10, 8, 0.55);
+  backdrop-filter: blur(10px);
+  text-align: left;
+}
+
+.lobby-corner.red {
+  border-left: 3px solid var(--red);
+}
+
+.lobby-corner.blue {
+  border-right: 3px solid var(--blue);
+  text-align: right;
+}
+
+.lobby-corner.filled {
+  background: rgba(20, 14, 10, 0.72);
+}
+
+.lobby-corner.ready {
+  box-shadow: 0 0 0 1px rgba(255, 214, 90, 0.35), 0 10px 28px rgba(0, 0, 0, 0.25);
+}
+
+.lobby-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+}
+
+.lobby-corner strong {
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+  font-size: 1.35rem;
+  font-weight: 400;
+}
+
+.lobby-status {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(183, 168, 148, 0.8);
+}
+
+.lobby-corner.ready .lobby-status {
+  color: var(--yellow-hot);
+}
+
+.lobby-vs {
+  align-self: center;
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  color: var(--yellow);
+  font-size: 1.1rem;
+}
+
+.lobby-wait {
+  margin: 0 auto 1.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.ring-stale {
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--danger);
+}
+
+.fight-screen.spectator .ring-chrome {
+  background: linear-gradient(180deg, rgba(8, 6, 4, 0.35), transparent);
+}
+
+.end-card {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(6, 4, 3, 0.55);
+  animation: end-card-in 0.35s ease both;
+  pointer-events: auto;
+}
+
+@keyframes end-card-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.end-card-panel {
+  width: min(440px, 100%);
+  padding: 1.35rem 1.25rem 1.2rem;
+  border: 1px solid rgba(255, 214, 90, 0.28);
+  border-radius: 6px;
+  background:
+    linear-gradient(160deg, rgba(40, 28, 14, 0.92), rgba(12, 9, 7, 0.94));
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  text-align: center;
+  animation: end-panel-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes end-panel-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.end-card-method {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  color: var(--yellow-hot);
+}
+
+.end-card-headline {
+  margin: 0.35rem 0 0.45rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.06em;
+  font-size: clamp(1.8rem, 5vw, 2.6rem);
+  font-weight: 400;
+  color: var(--ink);
+}
+
+.end-card-sub {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.end-card-fighters {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.55rem;
+  align-items: center;
+  margin-bottom: 0.85rem;
+}
+
+.end-card-corner {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0.55rem;
+  border: 1px solid rgba(255, 220, 140, 0.14);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.end-card-corner.red {
+  border-left: 3px solid var(--red);
+  text-align: left;
+}
+
+.end-card-corner.blue {
+  border-right: 3px solid var(--blue);
+  text-align: right;
+}
+
+.end-card-corner.winner {
+  box-shadow: 0 0 0 1px rgba(255, 214, 90, 0.4);
+}
+
+.end-card-name {
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+  font-size: 1.15rem;
+}
+
+.end-card-hp {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.end-card-vs {
+  font-family: var(--font-display);
+  color: var(--yellow);
+  letter-spacing: 0.08em;
+}
+
+.end-card-meta {
+  display: flex;
+  justify-content: center;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.end-card-id {
+  color: rgba(183, 168, 148, 0.55);
+}
+
+.end-card-actions {
+  display: grid;
+  gap: 0.45rem;
+}
+
+@media (max-width: 720px) {
+  .lobby-board {
+    grid-template-columns: 1fr;
+    max-width: 18rem;
+  }
+
+  .lobby-vs {
+    justify-self: center;
+  }
+
+  .lobby-corner.blue {
+    text-align: left;
+    border-right: 0;
+    border-left: 3px solid var(--blue);
+  }
+}
+
 .claim {
   padding: 0.95rem 1.1rem;
   border-radius: 4px;

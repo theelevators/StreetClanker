@@ -112,6 +112,31 @@ export interface CoachAdvice {
   at: number
 }
 
+/** Live lobby board for Fight Night claim → ready → ding. */
+export interface LobbyStatus {
+  matchId: string
+  phase: FightPhase
+  red: { name: string; connected: boolean; ready: boolean }
+  blue: { name: string; connected: boolean; ready: boolean }
+  bothReady: boolean
+  waitingOn: Corner | 'ding' | 'fight' | null
+  watchPath: string
+}
+
+/** Shareable end-of-bout card (kept after reset so watch links still resolve). */
+export interface BoutResult {
+  id: string
+  endedAt: number
+  method: 'knockout' | 'decision' | 'draw'
+  winner: Corner | 'draw' | null
+  red: { name: string; health: number }
+  blue: { name: string; health: number }
+  cardHeat: number
+  announcerLine: string | null
+  rounds: number
+  live: boolean
+}
+
 export type ThrowPhraseInput = {
   style?: PhraseStyle
   beats: PhraseBeatInput[]

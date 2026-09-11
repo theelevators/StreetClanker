@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import type {
   ActivePhrase,
+  BoutResult,
   ChatMessage,
   CoachAdvice,
   Corner,
   FightAction,
   FighterPublic,
   ImpactEvent,
+  LobbyStatus,
   MatchState,
   PhraseBeat,
   PhraseBeatInput,
@@ -131,6 +133,8 @@ export class MatchEngine {
   state: MatchState
   coachAdvice: Record<Corner, CoachAdvice[]> = { red: [], blue: [] }
   agentKeys: Partial<Record<Corner, string>> = {}
+  /** Last finished bout — survives reset so share links still resolve. */
+  lastFinished: BoutResult | null = null
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private onChange: (state: MatchState) => void
   private onChat: (message: ChatMessage) => void
@@ -171,6 +175,82 @@ export class MatchEngine {
 
   getState(): MatchState {
     return this.state
+  }
+
+  lobbyStatus(): LobbyStatus {
+    const { red, blue, phase, id } = this.state
+    const bothReady = red.connected && blue.connected && red.ready && blue.ready
+    let waitingOn: LobbyStatus['waitingOn'] = null
+    if (phase === 'lobby') {
+      if (!red.connected) waitingOn = 'red'
+      else if (!blue.connected) waitingOn = 'blue'
+      else if (!red.ready) waitingOn = 'red'
+      else if (!blue.ready) waitingOn = 'blue'
+      else waitingOn = 'ding'
+    } else if (phase !== 'ended') {
+      waitingOn = 'fight'
+    }
+    return {
+      matchId: id,
+      phase,
+      red: { name: red.name, connected: red.connected, ready: red.ready },
+      blue: { name: blue.name, connected: blue.connected, ready: blue.ready },
+      bothReady,
+      waitingOn,
+      watchPath: `/?watch=1&bout=${id}`,
+    }
+  }
+
+  getBout(id: string): BoutResult | null {
+    const live = this.state
+    if (live.id === id) {
+      const terminal =
+        live.phase === 'knockout' || live.phase === 'decision' || live.phase === 'ended'
+      if (terminal) {
+        return this.snapshotFromState(live, true)
+      }
+      return {
+        id: live.id,
+        endedAt: Date.now(),
+        method: 'decision',
+        winner: null,
+        red: { name: live.red.name, health: live.red.health },
+        blue: { name: live.blue.name, health: live.blue.health },
+        cardHeat: Math.round(live.cardHeat),
+        announcerLine: live.announcerLine,
+        rounds: live.round,
+        live: true,
+      }
+    }
+    if (this.lastFinished?.id === id) {
+      return { ...this.lastFinished, live: false }
+    }
+    return null
+  }
+
+  private snapshotFromState(state: MatchState, live: boolean): BoutResult {
+    const method: BoutResult['method'] =
+      state.winner === 'draw'
+        ? 'draw'
+        : state.phase === 'knockout' || state.red.knockedOut || state.blue.knockedOut
+          ? 'knockout'
+          : 'decision'
+    return {
+      id: state.id,
+      endedAt: Date.now(),
+      method,
+      winner: state.winner,
+      red: { name: state.red.name, health: state.red.health },
+      blue: { name: state.blue.name, health: state.blue.health },
+      cardHeat: Math.round(state.cardHeat),
+      announcerLine: state.announcerLine,
+      rounds: state.round,
+      live,
+    }
+  }
+
+  private rememberFinished() {
+    this.lastFinished = this.snapshotFromState(this.state, false)
   }
 
   private emit() {
@@ -418,9 +498,11 @@ export class MatchEngine {
         : `${this.state[winner].name} wins the Vegas card by decision!`
     this.pushEvent(text)
     this.pushChat({ from: 'system', name: 'Ring Announcer', text })
+    this.rememberFinished()
     this.emit()
     this.later(4_000, () => {
       this.state.phase = 'ended'
+      this.rememberFinished()
       this.emit()
     })
   }
@@ -437,9 +519,11 @@ export class MatchEngine {
     this.announce(ANNOUNCER.ko, 22)
     const text = `KNOCKOUT! ${this.state[winner].name} pops ${this.state[loser].name}'s block!`
     this.pushEvent(text)
+    this.rememberFinished()
     this.emit()
     this.later(5_000, () => {
       this.state.phase = 'ended'
+      this.rememberFinished()
       this.emit()
     })
   }
@@ -922,6 +1006,7 @@ export class MatchEngine {
       lastImpact: state.lastImpact,
       coachWhisper,
       tip: 'throw_phrase with 1–3 beats (jab/punch_left/punch_right/block/dodge/taunt). Server owns timing.',
+      lobby: this.lobbyStatus(),
     }
   }
 }

@@ -61,6 +61,19 @@ app.get('/api/state', (_req, res) => {
   res.json(engine.getState())
 })
 
+app.get('/api/lobby', (_req, res) => {
+  res.json(engine.lobbyStatus())
+})
+
+app.get('/api/bout/:id', (req, res) => {
+  const bout = engine.getBout(String(req.params.id))
+  if (!bout) {
+    res.status(404).json({ error: 'Bout not found — it may have been cleared.' })
+    return
+  }
+  res.json(bout)
+})
+
 app.get('/api/tools', (_req, res) => {
   res.json({
     protocol: 'WebMCP',
@@ -68,16 +81,17 @@ app.get('/api/tools', (_req, res) => {
     tools: [
       {
         name: 'claim_corner',
-        description: 'Join the BoxClub fight as an agent in the red or blue corner.',
+        description: 'Join the BoxClub Fight Night as an agent in the red or blue corner.',
       },
       {
         name: 'ready_up',
-        description: 'Signal that your agent is ready for the next round.',
+        description:
+          'Signal ready in the lobby. When BOTH corners are claimed and ready, the bell rings automatically.',
       },
       {
         name: 'get_match_state',
         description:
-          'Ring brief: phase, window timing, foe telegraph, card heat, coach whisper.',
+          'Ring brief: phase, window timing, foe telegraph, card heat, lobby board, coach whisper.',
       },
       {
         name: 'throw_phrase',
