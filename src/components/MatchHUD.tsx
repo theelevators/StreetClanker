@@ -30,7 +30,8 @@ export function MatchHUD({ state }: Props) {
   const remaining =
     state.phase === 'fighting' && state.roundEndsAt
       ? Math.max(0, Math.ceil((state.roundEndsAt - Date.now()) / 1000))
-      : state.phase === 'countdown' && state.countdownEndsAt
+      : (state.phase === 'countdown' || state.phase === 'between_rounds') &&
+          state.countdownEndsAt
         ? Math.max(0, Math.ceil((state.countdownEndsAt - Date.now()) / 1000))
         : null
 
@@ -162,8 +163,14 @@ function FighterMeter({
         <span>{fighter.name}</span>
         <span className={`meter-status status-${status.toLowerCase()}`}>{status}</span>
       </div>
-      <Bar label="HP" value={fighter.health} tone="health" />
+      <Bar label="HP" value={fighter.health} max={fighter.maxHealth} tone="health" />
       <Bar label="STM" value={fighter.stamina} tone="stamina" />
+      {fighter.comboCount > 1 && (
+        <div className="combo-chip" aria-live="polite">
+          <span className="combo-count">{fighter.comboCount} HIT</span>
+          {fighter.comboLabel && <span className="combo-label">{fighter.comboLabel}</span>}
+        </div>
+      )}
 
       {phrase ? (
         <div className={`phrase-telegraph style-${phrase.style}`}>
@@ -227,20 +234,26 @@ function shortMove(move: string) {
 function Bar({
   label,
   value,
+  max = 100,
   tone,
 }: {
   label: string
   value: number
+  max?: number
   tone: 'health' | 'stamina'
 }) {
+  const pct = Math.max(0, Math.min(100, (value / Math.max(1, max)) * 100))
   return (
     <div className="bar">
-      <span>{label}</span>
+      <span>
+        {label}{' '}
+        <em className="bar-value">
+          {Math.round(value)}
+          {tone === 'health' ? `/${Math.round(max)}` : ''}
+        </em>
+      </span>
       <div className="bar-track">
-        <div
-          className={`bar-fill bar-${tone}`}
-          style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
-        />
+        <div className={`bar-fill bar-${tone}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   )
@@ -255,7 +268,7 @@ function phaseLabel(phase: FightPhase, state: MatchState) {
     case 'fighting':
       return 'DING DING'
     case 'between_rounds':
-      return 'CORNER BREAK'
+      return 'COACH YOUR AGENT'
     case 'knockout':
       return 'KNOCKOUT'
     case 'decision':

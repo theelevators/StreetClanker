@@ -16,15 +16,20 @@ import type {
   PhraseStyle,
   ThrowPhraseInput,
 } from '../shared/types.ts'
+import {
+  COMBO_WINDOW_MS,
+  evaluateCombo,
+  MAX_HEALTH,
+  MAX_STAMINA,
+} from '../shared/combat.ts'
 import { fighterStore, formatRecord } from './fighterStore.ts'
 import { crowdStore } from './crowdStore.ts'
 
-const ROUND_MS = 45_000
+const ROUND_MS = 60_000
 const COUNTDOWN_MS = 3_000
-const BETWEEN_ROUNDS_MS = 5_000
+/** Corner break — long enough for a human to brief their agent. */
+const BETWEEN_ROUNDS_MS = 25_000
 const MAX_ROUNDS = 3
-const MAX_HEALTH = 100
-const MAX_STAMINA = 100
 const CHAT_LIMIT = 80
 const WINDOW_GRACE_MS = 160
 const COVER_MS = 900
@@ -42,9 +47,9 @@ const MOVE_COST: Record<PhraseMove, number> = {
 }
 
 const MOVE_DAMAGE: Partial<Record<PhraseMove, number>> = {
-  jab: 6,
-  punch_left: 11,
-  punch_right: 13,
+  jab: 5,
+  punch_left: 9,
+  punch_right: 11,
 }
 
 const STYLE_DAMAGE: Record<PhraseStyle, number> = {
@@ -105,6 +110,7 @@ function blankFighter(corner: Corner, name: string): FighterPublic {
     ready: false,
     connected: false,
     health: MAX_HEALTH,
+    maxHealth: MAX_HEALTH,
     stamina: MAX_STAMINA,
     guard: 0,
     knockedOut: false,
@@ -112,7 +118,16 @@ function blankFighter(corner: Corner, name: string): FighterPublic {
     lastActionAt: null,
     nextWindowAt: null,
     covering: false,
+    comboCount: 0,
+    comboLabel: null,
   }
+}
+
+type ComboTrail = {
+  moves: PhraseMove[]
+  hitCount: number
+  lastAt: number
+  label: string | null
 }
 
 function pick<T>(arr: readonly T[]): T {
@@ -145,6 +160,13 @@ export class MatchEngine {
   /** Latch so auto-cover fires once per missed window */
   private coverLatch: Record<Corner, number> = { red: 0, blue: 0 }
   private lastHeatTick = 0
+  /** Street-fighter combo trails — resets on whiff, block, or getting hit. */
+  private comboTrail: Record<Corner, ComboTrail> = {
+    red: { moves: [], hitCount: 0, lastAt: 0, label: null },
+    blue: { moves: [], hitCount: 0, lastAt: 0, label: null },
+  }
+  /** Clean attack hits already scored inside the active phrase. */
+  private phraseHitCount: Record<string, number> = {}
 
   constructor(
     onChange: (state: MatchState) => void,
@@ -386,6 +408,7 @@ export class MatchEngine {
     this.coachAdvice = { red: [], blue: [] }
     this.agentKeys = {}
     this.coverLatch = { red: 0, blue: 0 }
+    this.resetCombos()
     this.state = this.createLobby()
     this.pushChat({
       from: 'system',
@@ -409,6 +432,7 @@ export class MatchEngine {
     this.clearTimers()
     this.coachAdvice = { red: [], blue: [] }
     this.coverLatch = { red: 0, blue: 0 }
+    this.resetCombos()
     this.scoredMatchId = null
     this.state = this.createLobby()
     this.agentKeys = { red: redKey, blue: blueKey }
@@ -458,6 +482,7 @@ export class MatchEngine {
     this.clearTimers()
     this.coachAdvice = { red: [], blue: [] }
     this.coverLatch = { red: 0, blue: 0 }
+    this.resetCombos()
     this.scoredMatchId = null
     this.agentKeys = {}
     this.state = this.createLobby()
@@ -636,6 +661,7 @@ export class MatchEngine {
       f.guard = 0
     }
     this.coverLatch = { red: 0, blue: 0 }
+    this.resetCombos()
     this.pushEvent(`Round ${this.state.round} — lights, camera, leather`)
     this.emit()
     this.later(COUNTDOWN_MS, () => this.beginRound())
@@ -653,6 +679,7 @@ export class MatchEngine {
     this.state.red.nextWindowAt = t + 250
     this.state.blue.nextWindowAt = t + 250
     this.state.activePhrases = []
+    this.phraseHitCount = {}
     this.announce(ANNOUNCER.round, 6)
     this.pushEvent(`DING — Round ${this.state.round}`)
     this.emit()
@@ -674,10 +701,13 @@ export class MatchEngine {
 
     this.state.phase = 'between_rounds'
     this.state.roundEndsAt = null
+    this.state.countdownEndsAt = Date.now() + BETWEEN_ROUNDS_MS
     this.state.red.ready = false
     this.state.blue.ready = false
     this.announce(ANNOUNCER.between, -4)
-    this.pushEvent(`End of round ${this.state.round}`)
+    this.pushEvent(
+      `End of round ${this.state.round} — ${Math.round(BETWEEN_ROUNDS_MS / 1000)}s corner break. Talk to your agent.`,
+    )
     this.emit()
     this.later(BETWEEN_ROUNDS_MS, () => {
       this.state.round += 1
@@ -856,6 +886,7 @@ export class MatchEngine {
       this.state.cardHeat = clamp(this.state.cardHeat + 6, 0, 100)
       attacker.lastAction = null
       attacker.lastActionAt = beat.at
+      this.extendComboTrail(phrase.corner, 'taunt', beat.at, { countAsHit: false })
       this.pushEvent(`${attacker.name} showboats — the strip loves it`)
       this.emit()
       return
@@ -865,7 +896,6 @@ export class MatchEngine {
       attacker.lastAction = move
       attacker.lastActionAt = beat.at
       attacker.guard = Math.min(100, attacker.guard + (move === 'block' ? 55 : 25))
-      // Block turtles into cover; dodge stays a slip (anim can read lastAction)
       if (move === 'block') {
         attacker.covering = true
         this.later(400, () => {
@@ -873,6 +903,7 @@ export class MatchEngine {
           this.emit()
         })
       }
+      this.extendComboTrail(phrase.corner, move, beat.at, { countAsHit: false })
       this.pushEvent(
         move === 'block'
           ? `${attacker.name} gloves up`
@@ -888,8 +919,15 @@ export class MatchEngine {
     attacker.lastActionAt = beat.at
     attacker.guard = Math.max(0, attacker.guard - 12)
 
+    const priorHits = this.phraseHitCount[phrase.id] ?? 0
     let damage = (MOVE_DAMAGE[move] ?? 8) * STYLE_DAMAGE[phrase.style]
     let result: ImpactEvent['result'] = 'hit'
+    let comboEval = evaluateCombo({
+      trail: [...this.comboTrail[phrase.corner].moves, move],
+      hitCount: this.comboTrail[phrase.corner].hitCount + 1,
+      priorHitsInPhrase: priorHits,
+      prevLabel: this.comboTrail[phrase.corner].label,
+    })
 
     const dodgeWindow = this.defenseUp(defender, oppCorner, beat.at, 'dodge')
     const blockWindow =
@@ -898,10 +936,12 @@ export class MatchEngine {
     if (dodgeWindow && Math.random() < 0.75) {
       result = 'dodged'
       damage = 0
+      this.breakCombo(phrase.corner)
       this.announce(ANNOUNCER.slip, 3)
       this.pushEvent(`${defender.name} slips ${attacker.name}'s ${move.replace('_', ' ')}`)
     } else if (blockWindow) {
       result = 'blocked'
+      this.breakCombo(phrase.corner)
       const absorbed = Math.min(Math.max(defender.guard, 35), damage * 0.85)
       damage = Math.max(1, damage - absorbed * 0.55)
       defender.guard = Math.max(0, defender.guard - 35)
@@ -909,19 +949,45 @@ export class MatchEngine {
       this.pushEvent(`${defender.name} blocks — still eats ${Math.round(damage)}`)
     } else {
       result = 'hit'
-      // trading bonus if foe also punching into it
+      damage *= comboEval.mult
       const foePhrase = this.state.activePhrases.find((p) => p.corner === oppCorner)
       const trading = foePhrase?.beats.some(
         (b) => isAttack(b.move) && Math.abs(b.at - beat.at) <= 220,
       )
       if (trading) damage *= 1.28
-      if (damage >= 14 || Math.random() < (phrase.style === 'aggressive' ? 0.16 : 0.08)) {
+      this.extendComboTrail(phrase.corner, move, beat.at, { countAsHit: true })
+      this.phraseHitCount[phrase.id] = priorHits + 1
+      this.breakCombo(oppCorner) // getting hit drops their chain
+      comboEval = evaluateCombo({
+        trail: this.comboTrail[phrase.corner].moves,
+        hitCount: this.comboTrail[phrase.corner].hitCount,
+        priorHitsInPhrase: priorHits,
+        prevLabel: this.comboTrail[phrase.corner].label,
+      })
+      this.comboTrail[phrase.corner].label = comboEval.label
+      attacker.comboCount = comboEval.count
+      attacker.comboLabel = comboEval.label
+      if (comboEval.recipeJustHit) {
+        this.announce(ANNOUNCER.combo, 7)
+        this.pushEvent(
+          `${attacker.name} lands ${comboEval.label}! (${comboEval.mult.toFixed(2)}x)`,
+        )
+      } else if (comboEval.count >= 3) {
+        this.announce(ANNOUNCER.combo, 5)
+        this.pushEvent(
+          `${attacker.name} chain ${comboEval.count} — ${move.replace('_', ' ')} for ${Math.round(damage)}`,
+        )
+      } else if (damage >= 14 || Math.random() < (phrase.style === 'aggressive' ? 0.16 : 0.08)) {
         this.announce(ANNOUNCER.bomb, 8)
+        this.pushEvent(
+          `${attacker.name} lands a ${move.replace('_', ' ')} for ${Math.round(damage)}`,
+        )
+      } else {
+        this.pushEvent(
+          `${attacker.name} lands a ${move.replace('_', ' ')} for ${Math.round(damage)}`,
+        )
       }
-      this.pushEvent(
-        `${attacker.name} lands a ${move.replace('_', ' ')} for ${Math.round(damage)}`,
-      )
-      this.state.cardHeat = clamp(this.state.cardHeat + 3, 0, 100)
+      this.state.cardHeat = clamp(this.state.cardHeat + 3 + Math.min(comboEval.count, 4), 0, 100)
     }
 
     if (result !== 'dodged') {
@@ -944,6 +1010,52 @@ export class MatchEngine {
     if (defender.health <= 0) {
       this.knockout(phrase.corner)
     }
+  }
+
+
+
+  private resetCombos() {
+    this.comboTrail = {
+      red: { moves: [], hitCount: 0, lastAt: 0, label: null },
+      blue: { moves: [], hitCount: 0, lastAt: 0, label: null },
+    }
+    this.phraseHitCount = {}
+    for (const c of ['red', 'blue'] as Corner[]) {
+      this.state[c].comboCount = 0
+      this.state[c].comboLabel = null
+    }
+  }
+
+  private breakCombo(corner: Corner) {
+    this.comboTrail[corner] = { moves: [], hitCount: 0, lastAt: 0, label: null }
+    this.state[corner].comboCount = 0
+    this.state[corner].comboLabel = null
+  }
+
+  private extendComboTrail(
+    corner: Corner,
+    move: PhraseMove,
+    at: number,
+    opts: { countAsHit: boolean },
+  ) {
+    const trail = this.comboTrail[corner]
+    if (trail.lastAt && at - trail.lastAt > COMBO_WINDOW_MS) {
+      trail.moves = []
+      trail.hitCount = 0
+      trail.label = null
+    }
+    trail.moves = [...trail.moves, move].slice(-6)
+    trail.lastAt = at
+    if (opts.countAsHit) trail.hitCount += 1
+    const evaluated = evaluateCombo({
+      trail: trail.moves,
+      hitCount: Math.max(trail.hitCount, opts.countAsHit ? trail.hitCount : trail.hitCount),
+      priorHitsInPhrase: 0,
+      prevLabel: trail.label,
+    })
+    trail.label = evaluated.label
+    this.state[corner].comboCount = trail.hitCount
+    this.state[corner].comboLabel = trail.label
   }
 
   private autoCover(corner: Corner, reason: string) {
@@ -1057,21 +1169,26 @@ export class MatchEngine {
       } else if (incoming && !isLead) {
         input =
           roll > 0.45
-            ? { style: 'counter', beats: [{ move: 'dodge' }, { move: 'jab' }] }
-            : { style: 'counter', beats: [{ move: 'block' }, { move: 'punch_right' }] }
-      } else if (roll < 0.2) {
+            ? { style: 'counter', beats: [{ move: 'dodge' }, { move: 'punch_right' }] }
+            : { style: 'counter', beats: [{ move: 'block' }, { move: 'punch_left' }] }
+      } else if (roll < 0.22) {
+        input = {
+          style: 'aggressive',
+          beats: [{ move: 'jab' }, { move: 'jab' }, { move: 'punch_right' }],
+        }
+      } else if (roll < 0.4) {
         input = {
           style: 'aggressive',
           beats: [{ move: 'jab' }, { move: 'punch_left' }, { move: 'punch_right' }],
         }
-      } else if (roll < 0.35) {
-        input = { style: 'showboat', beats: [{ move: 'taunt' }, { move: 'jab' }] }
-      } else if (roll < 0.55) {
-        input = { style: 'pressure', beats: [{ move: 'jab' }, { move: 'jab' }] }
-      } else if (roll < 0.7) {
+      } else if (roll < 0.52) {
+        input = { style: 'showboat', beats: [{ move: 'taunt' }, { move: 'punch_right' }] }
+      } else if (roll < 0.68) {
+        input = { style: 'pressure', beats: [{ move: 'jab' }, { move: 'punch_right' }] }
+      } else if (roll < 0.82) {
         input = {
           style: 'pressure',
-          beats: [{ move: 'jab' }, { move: pick(['punch_left', 'punch_right'] as const) }],
+          beats: [{ move: 'punch_left' }, { move: 'punch_right' }],
         }
       } else {
         input = {
@@ -1163,7 +1280,10 @@ export class MatchEngine {
     } else if (state.phase === 'countdown') {
       coachWhisper = 'Breathe. First phrase wins the optics.'
     } else if (state.phase === 'between_rounds') {
-      coachWhisper = 'Rewrite the game plan. Heat carries over.'
+      const breakLeft = state.countdownEndsAt
+        ? Math.max(0, Math.ceil((state.countdownEndsAt - t) / 1000))
+        : Math.round(BETWEEN_ROUNDS_MS / 1000)
+      coachWhisper = `Corner break — ~${breakLeft}s left. Brief your agent before the next bell. Heat carries over.`
     } else if (state.phase === 'ended' || state.phase === 'decision' || state.phase === 'knockout') {
       coachWhisper = 'Card’s closed. Rematch when the house is ready.'
     } else if (you?.covering) {
@@ -1174,8 +1294,13 @@ export class MatchEngine {
       coachWhisper = `Foe telegraph: ${foePhrase.beats.map((b) => b.move).join('→')}. Counter or cover.`
     } else if ((you?.stamina ?? 0) < 25) {
       coachWhisper = 'Gas tank low — jab phrases only, or block and breathe.'
+    } else if ((you?.comboCount ?? 0) >= 2) {
+      coachWhisper = `Chain live (${you!.comboCount}${you!.comboLabel ? ` · ${you!.comboLabel}` : ''}) — finish the string, don’t drop it.`
     } else if (state.cardHeat > 70) {
       coachWhisper = 'Crowd is feral — a showboat phrase prints highlight reels.'
+    } else {
+      coachWhisper =
+        'Build a string: jab→jab→punch_right or slip→cross. Combos hit harder the longer they live.'
     }
 
     return {
@@ -1209,7 +1334,7 @@ export class MatchEngine {
         : null,
       lastImpact: state.lastImpact,
       coachWhisper,
-      tip: 'throw_phrase with 1–3 beats (jab/punch_left/punch_right/block/dodge/taunt). Server owns timing.',
+      tip: 'throw_phrase with 1–3 beats. Chain hits for combo multipliers — jab→jab→punch_right, dodge→punch_right, block→punch_left. Server owns timing.',
       lobby: this.lobbyStatus(),
     }
   }

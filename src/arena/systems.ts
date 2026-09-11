@@ -162,7 +162,7 @@ function animateFighters(world: World) {
     })
 
     // Low-HP eyes burn hotter / redder
-    const hp = Math.max(0, Math.min(1, fighter.health / 100))
+    const hp = Math.max(0, Math.min(1, fighter.health / Math.max(1, fighter.maxHealth || 300)))
     const baseGlow = 0.55 + (1 - hp) * 1.35
     if (rig.leftEye.emissiveIntensity < baseGlow) {
       rig.leftEye.emissiveIntensity = baseGlow

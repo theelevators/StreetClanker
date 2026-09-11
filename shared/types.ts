@@ -81,6 +81,8 @@ export interface FighterPublic {
   ready: boolean
   connected: boolean
   health: number
+  /** Absolute HP ceiling for bar normalization */
+  maxHealth: number
   stamina: number
   guard: number
   knockedOut: boolean
@@ -90,6 +92,10 @@ export interface FighterPublic {
   nextWindowAt: number | null
   /** Auto-covering because they missed a window */
   covering: boolean
+  /** Live combo hit count (Street Fighter style stacking) */
+  comboCount: number
+  /** Named recipe / "N HIT" label when a chain is alive */
+  comboLabel: string | null
   /** Live career snapshot (from the fighter card store) */
   record?: FighterRecord
 }

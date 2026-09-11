@@ -1410,6 +1410,48 @@ code {
   background: linear-gradient(90deg, #3d8bfd, #7ad0ff);
 }
 
+.bar-value {
+  font-style: normal;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-left: 0.15rem;
+}
+
+.combo-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  animation: combo-pop 0.35s ease-out;
+}
+
+.combo-count {
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  font-size: 1.05rem;
+  color: var(--yellow-hot);
+  text-shadow: 0 0 12px rgba(255, 214, 90, 0.35);
+}
+
+.combo-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 214, 90, 0.82);
+}
+
+@keyframes combo-pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .ko-tag {
   margin-top: 0.35rem;
   color: var(--danger);

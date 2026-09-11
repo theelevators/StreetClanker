@@ -159,7 +159,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'throw_phrase',
         description:
-          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase on the shared ring clock. Server owns timing — you commit intent (jab/punch_left/punch_right/block/dodge/taunt). Styles: aggressive, counter, pressure, showboat. Miss your window and you auto-cover.',
+          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase on the shared ring clock. Server owns timing — you commit intent (jab/punch_left/punch_right/block/dodge/taunt). Styles: aggressive, counter, pressure, showboat. Chain hits for Street Fighter-style combo multipliers — recipes like jab→jab→punch_right (Double Jab Cross) or dodge→punch_right (Slip Counter) hit harder. Miss your window and you auto-cover.',
         inputSchema: {
           type: 'object',
           properties: {
