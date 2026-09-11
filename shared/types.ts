@@ -16,6 +16,34 @@ export type FightAction =
   | 'block'
   | 'dodge'
 
+/** Single beat inside a committed phrase (combo). */
+export type PhraseMove = FightAction | 'taunt'
+
+export type PhraseStyle = 'aggressive' | 'counter' | 'pressure' | 'showboat'
+
+/** Client commit — `at` is ms offset from phrase start (optional; engine spaces beats). */
+export interface PhraseBeatInput {
+  move: PhraseMove
+  at?: number
+}
+
+/** Scheduled beat on the ring clock — `at` is absolute epoch ms. */
+export interface PhraseBeat {
+  at: number
+  move: PhraseMove
+}
+
+export interface ActivePhrase {
+  id: string
+  corner: Corner
+  style: PhraseStyle
+  beats: PhraseBeat[]
+  startedAt: number
+  endsAt: number
+  /** beat indexes already resolved on the ring clock */
+  resolved: number[]
+}
+
 export type ImpactResult = 'hit' | 'blocked' | 'dodged'
 
 export interface ImpactEvent {
@@ -40,6 +68,10 @@ export interface FighterPublic {
   knockedOut: boolean
   lastAction: FightAction | null
   lastActionAt: number | null
+  /** Earliest time this corner may commit another phrase */
+  nextWindowAt: number | null
+  /** Auto-covering because they missed a window */
+  covering: boolean
 }
 
 export interface ChatMessage {
@@ -65,12 +97,24 @@ export interface MatchState {
   eventLog: string[]
   createdAt: number
   lastImpact: ImpactEvent | null
+  /** Currently committed phrases playing out on the ring clock */
+  activePhrases: ActivePhrase[]
+  /** Vegas card energy — crowd heat 0–100 */
+  cardHeat: number
+  /** Live announcer call for the HUD */
+  announcerLine: string | null
+  announcerLineAt: number | null
 }
 
 export interface CoachAdvice {
   corner: Corner
   text: string
   at: number
+}
+
+export type ThrowPhraseInput = {
+  style?: PhraseStyle
+  beats: PhraseBeatInput[]
 }
 
 export type ClientMessage =
@@ -84,6 +128,12 @@ export type ClientMessage =
       type: 'agent_command'
       agentKey: string
       action: FightAction
+    }
+  | {
+      type: 'agent_throw_phrase'
+      agentKey: string
+      style?: PhraseStyle
+      beats: PhraseBeatInput[]
     }
   | {
       type: 'agent_join'

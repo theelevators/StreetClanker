@@ -1,4 +1,5 @@
 export type {
+  ActivePhrase,
   ChatMessage,
   ClientMessage,
   CoachAdvice,
@@ -9,5 +10,10 @@ export type {
   ImpactEvent,
   ImpactResult,
   MatchState,
+  PhraseBeat,
+  PhraseBeatInput,
+  PhraseMove,
+  PhraseStyle,
   ServerMessage,
+  ThrowPhraseInput,
 } from '../shared/types.ts'

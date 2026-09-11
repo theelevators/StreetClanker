@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type {
+  ActivePhrase,
   ChatMessage,
   CoachAdvice,
   Corner,
@@ -7,6 +8,11 @@ import type {
   FighterPublic,
   ImpactEvent,
   MatchState,
+  PhraseBeat,
+  PhraseBeatInput,
+  PhraseMove,
+  PhraseStyle,
+  ThrowPhraseInput,
 } from '../shared/types.ts'
 
 const ROUND_MS = 45_000
@@ -15,24 +21,77 @@ const BETWEEN_ROUNDS_MS = 5_000
 const MAX_ROUNDS = 3
 const MAX_HEALTH = 100
 const MAX_STAMINA = 100
-const ACTION_COOLDOWN_MS = 520
 const CHAT_LIMIT = 80
+const WINDOW_GRACE_MS = 160
+const COVER_MS = 900
+const BEAT_GAP_MS = 300
+const TELEGRAPH_MS = 200
+const PHRASE_RECOVERY_MS = 420
 
-const ACTION_COST: Record<FightAction, number> = {
-  jab: 8,
-  punch_left: 14,
-  punch_right: 14,
-  block: 4,
-  dodge: 10,
-}
-
-const ACTION_DAMAGE: Record<FightAction, number> = {
+const MOVE_COST: Record<PhraseMove, number> = {
   jab: 6,
-  punch_left: 12,
-  punch_right: 13,
-  block: 0,
-  dodge: 0,
+  punch_left: 10,
+  punch_right: 12,
+  block: 4,
+  dodge: 8,
+  taunt: 3,
 }
+
+const MOVE_DAMAGE: Partial<Record<PhraseMove, number>> = {
+  jab: 6,
+  punch_left: 11,
+  punch_right: 13,
+}
+
+const STYLE_DAMAGE: Record<PhraseStyle, number> = {
+  aggressive: 1.12,
+  counter: 1.06,
+  pressure: 1.0,
+  showboat: 0.9,
+}
+
+const ANNOUNCER = {
+  intro: [
+    'LAS VEGAS — the lights are up and the card is LIVE.',
+    'Under the desert neon… two corners, one belt.',
+    'The Garden is packed. Somebody’s getting famous tonight.',
+  ],
+  round: [
+    'Round heat rising — don’t blink.',
+    'They’re trading in the pocket!',
+    'This is fight-night television, baby.',
+  ],
+  combo: [
+    'WHAT A COMBINATION!',
+    'STRINGING THEM TOGETHER!',
+    'PHRASE COMPLETE — and it hurt!',
+  ],
+  cover: [
+    'Auto-cover! Gloves up — the window slipped.',
+    'Survival mode. Cover and reset.',
+    'Missed the window — they’re turtling.',
+  ],
+  bomb: [
+    'OH THAT’S A BOMB!',
+    'HEAVY HANDS UNDER THE LIGHTS!',
+    'THE CROWD IS ON ITS FEET!',
+  ],
+  slip: [
+    'SLIPPED IT! Pure Vegas defense.',
+    'Airball — they danced out of range.',
+    'Empty leather. The dodge was filthy.',
+  ],
+  ko: [
+    'IT’S OVER! Sleep under the neon!',
+    'GOOD NIGHT — the desert just claimed one.',
+    'And still… unfinished business no more.',
+  ],
+  between: [
+    'Corners. Cutmen. Deep breath. We go again.',
+    'Between rounds — rewrite the game plan.',
+    'The house wants blood in the next three minutes.',
+  ],
+} as const
 
 function blankFighter(corner: Corner, name: string): FighterPublic {
   return {
@@ -47,7 +106,25 @@ function blankFighter(corner: Corner, name: string): FighterPublic {
     knockedOut: false,
     lastAction: null,
     lastActionAt: null,
+    nextWindowAt: null,
+    covering: false,
   }
+}
+
+function pick<T>(arr: readonly T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)]!
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n))
+}
+
+function isAttack(move: PhraseMove): move is FightAction {
+  return move === 'jab' || move === 'punch_left' || move === 'punch_right'
+}
+
+function isDefense(move: PhraseMove): move is 'block' | 'dodge' {
+  return move === 'block' || move === 'dodge'
 }
 
 export class MatchEngine {
@@ -57,6 +134,9 @@ export class MatchEngine {
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private onChange: (state: MatchState) => void
   private onChat: (message: ChatMessage) => void
+  /** Latch so auto-cover fires once per missed window */
+  private coverLatch: Record<Corner, number> = { red: 0, blue: 0 }
+  private lastHeatTick = 0
 
   constructor(
     onChange: (state: MatchState) => void,
@@ -79,9 +159,13 @@ export class MatchEngine {
       red: blankFighter('red', 'Red Rocker'),
       blue: blankFighter('blue', 'Blue Bomber'),
       chat: [],
-      eventLog: ['BoxClub lobby open. Claim a corner and lace up.'],
+      eventLog: ['BoxClub lobby open. Vegas card energy — claim a corner.'],
       createdAt: Date.now(),
       lastImpact: null,
+      activePhrases: [],
+      cardHeat: 12,
+      announcerLine: null,
+      announcerLineAt: null,
     }
   }
 
@@ -95,6 +179,15 @@ export class MatchEngine {
 
   private pushEvent(text: string) {
     this.state.eventLog = [text, ...this.state.eventLog].slice(0, 40)
+  }
+
+  private announce(pool: readonly string[], heatBump = 0) {
+    const line = pick(pool)
+    this.state.announcerLine = line
+    this.state.announcerLineAt = Date.now()
+    this.state.cardHeat = clamp(this.state.cardHeat + heatBump, 0, 100)
+    this.pushChat({ from: 'system', name: 'Ring Announcer', text: line })
+    this.pushEvent(`🎤 ${line}`)
   }
 
   pushChat(partial: Omit<ChatMessage, 'id' | 'at'> & { at?: number }) {
@@ -129,17 +222,17 @@ export class MatchEngine {
     this.clearTimers()
     this.coachAdvice = { red: [], blue: [] }
     this.agentKeys = {}
+    this.coverLatch = { red: 0, blue: 0 }
     this.state = this.createLobby()
     this.pushChat({
       from: 'system',
       name: 'Ring Announcer',
-      text: 'Fresh canvas. Who wants smoke?',
+      text: 'Fresh canvas under the neon. Who wants smoke?',
     })
     this.emit()
   }
 
   spawnDemoBots() {
-    // Always start from a clean lobby so demos work after prior claims
     if (this.state.phase !== 'lobby') {
       this.clearTimers()
       this.coachAdvice = { red: [], blue: [] }
@@ -152,6 +245,8 @@ export class MatchEngine {
       this.state.winner = null
       this.state.round = 0
       this.state.lastImpact = null
+      this.state.activePhrases = []
+      this.state.cardHeat = 18
     }
     this.joinAgent('demo-red', 'red', 'Rusty Hook')
     this.joinAgent('demo-blue', 'blue', 'Chrome Chin')
@@ -162,7 +257,6 @@ export class MatchEngine {
       name: 'Crowd',
       text: 'Demo bots locked in — let them cook!',
     })
-    // setReady already auto-starts when both ready; if not, force it
     if (this.state.phase === 'lobby') this.startMatch()
   }
 
@@ -237,6 +331,9 @@ export class MatchEngine {
     this.state.blue.knockedOut = false
     this.state.red.ready = false
     this.state.blue.ready = false
+    this.state.activePhrases = []
+    this.state.cardHeat = clamp(this.state.cardHeat + 8, 0, 100)
+    this.announce(ANNOUNCER.intro, 10)
     this.beginCountdown()
   }
 
@@ -245,12 +342,17 @@ export class MatchEngine {
     this.state.phase = 'countdown'
     this.state.countdownEndsAt = Date.now() + COUNTDOWN_MS
     this.state.roundEndsAt = null
-    this.pushEvent(`Round ${this.state.round} — get ready`)
-    this.pushChat({
-      from: 'system',
-      name: 'Ring Announcer',
-      text: `Round ${this.state.round}! Protect yourselves at all times.`,
-    })
+    this.state.activePhrases = []
+    for (const c of ['red', 'blue'] as Corner[]) {
+      const f = this.state[c]
+      f.covering = false
+      f.nextWindowAt = null
+      f.lastAction = null
+      f.lastActionAt = null
+      f.guard = 0
+    }
+    this.coverLatch = { red: 0, blue: 0 }
+    this.pushEvent(`Round ${this.state.round} — lights, camera, leather`)
     this.emit()
     this.later(COUNTDOWN_MS, () => this.beginRound())
   }
@@ -259,10 +361,15 @@ export class MatchEngine {
     this.state.phase = 'fighting'
     this.state.countdownEndsAt = null
     this.state.roundEndsAt = Date.now() + ROUND_MS
+    const t = Date.now()
     this.state.red.guard = 0
     this.state.blue.guard = 0
     this.state.red.stamina = Math.min(MAX_STAMINA, this.state.red.stamina + 20)
     this.state.blue.stamina = Math.min(MAX_STAMINA, this.state.blue.stamina + 20)
+    this.state.red.nextWindowAt = t + 250
+    this.state.blue.nextWindowAt = t + 250
+    this.state.activePhrases = []
+    this.announce(ANNOUNCER.round, 6)
     this.pushEvent(`DING — Round ${this.state.round}`)
     this.emit()
     this.later(ROUND_MS, () => this.endRound())
@@ -271,6 +378,10 @@ export class MatchEngine {
   private endRound() {
     if (this.state.phase !== 'fighting') return
     if (this.state.red.knockedOut || this.state.blue.knockedOut) return
+
+    this.state.activePhrases = []
+    this.state.red.covering = false
+    this.state.blue.covering = false
 
     if (this.state.round >= this.state.maxRounds) {
       this.decideWinner()
@@ -281,12 +392,8 @@ export class MatchEngine {
     this.state.roundEndsAt = null
     this.state.red.ready = false
     this.state.blue.ready = false
+    this.announce(ANNOUNCER.between, -4)
     this.pushEvent(`End of round ${this.state.round}`)
-    this.pushChat({
-      from: 'system',
-      name: 'Ring Announcer',
-      text: `End of round ${this.state.round}. Coaches, talk to your agents.`,
-    })
     this.emit()
     this.later(BETWEEN_ROUNDS_MS, () => {
       this.state.round += 1
@@ -303,10 +410,12 @@ export class MatchEngine {
     this.state.phase = 'decision'
     this.state.winner = winner
     this.state.roundEndsAt = null
+    this.state.activePhrases = []
+    this.state.cardHeat = clamp(this.state.cardHeat + 12, 0, 100)
     const text =
       winner === 'draw'
-        ? 'Judges call it a DRAW!'
-        : `${this.state[winner].name} wins by decision!`
+        ? 'Judges call it a DRAW under the neon!'
+        : `${this.state[winner].name} wins the Vegas card by decision!`
     this.pushEvent(text)
     this.pushChat({ from: 'system', name: 'Ring Announcer', text })
     this.emit()
@@ -324,9 +433,10 @@ export class MatchEngine {
     this.state.phase = 'knockout'
     this.state.winner = winner
     this.state.roundEndsAt = null
+    this.state.activePhrases = []
+    this.announce(ANNOUNCER.ko, 22)
     const text = `KNOCKOUT! ${this.state[winner].name} pops ${this.state[loser].name}'s block!`
     this.pushEvent(text)
-    this.pushChat({ from: 'system', name: 'Ring Announcer', text, corner: winner })
     this.emit()
     this.later(5_000, () => {
       this.state.phase = 'ended'
@@ -334,109 +444,371 @@ export class MatchEngine {
     })
   }
 
-  applyAction(corner: Corner, action: FightAction) {
+  private hasActivePhrase(corner: Corner) {
+    return this.state.activePhrases.some((p) => p.corner === corner)
+  }
+
+  private phraseCost(beats: PhraseBeatInput[], style: PhraseStyle) {
+    const base = beats.reduce((s, b) => s + MOVE_COST[b.move], 0)
+    const mul =
+      style === 'aggressive' ? 1.1 : style === 'showboat' ? 1.15 : style === 'pressure' ? 1.05 : 1
+    return Math.round(base * mul)
+  }
+
+  private scheduleBeats(inputs: PhraseBeatInput[], startedAt: number): PhraseBeat[] {
+    const sliced = inputs.slice(0, 3)
+    if (sliced.length === 0) return [{ move: 'jab', at: startedAt + TELEGRAPH_MS }]
+
+    let cursor = startedAt + TELEGRAPH_MS
+    return sliced.map((b, i) => {
+      if (i === 0) {
+        cursor = startedAt + TELEGRAPH_MS
+      } else if (typeof b.at === 'number' && b.at > 0) {
+        // treat provided `at` as offset from phrase start if it looks like a timeline
+        const absolute = startedAt + Math.max(TELEGRAPH_MS, b.at)
+        cursor = Math.max(cursor + 180, absolute)
+      } else {
+        cursor += BEAT_GAP_MS
+      }
+      return { move: b.move, at: cursor }
+    })
+  }
+
+  throwPhrase(corner: Corner, input: ThrowPhraseInput) {
     if (this.state.phase !== 'fighting') {
-      throw new Error('Fight is not live')
+      throw new Error('Fight is not live — wait for the bell')
     }
     const self = this.state[corner]
     const oppCorner: Corner = corner === 'red' ? 'blue' : 'red'
     const opp = this.state[oppCorner]
-    const now = Date.now()
+    const t = Date.now()
 
     if (self.knockedOut || opp.knockedOut) {
       throw new Error('Somebody already ate canvas')
     }
-    if (self.lastActionAt && now - self.lastActionAt < ACTION_COOLDOWN_MS) {
-      throw new Error('Too soon — reset your feet')
+    if (this.hasActivePhrase(corner)) {
+      throw new Error('Phrase already in the air — finish the combo')
     }
-    const cost = ACTION_COST[action]
-    if (self.stamina < cost) {
-      throw new Error('Gassed out — recover stamina')
+    if (self.covering) {
+      throw new Error('Still covering — gloves are glued')
     }
-
-    self.stamina = Math.max(0, self.stamina - cost)
-    self.lastAction = action
-    self.lastActionAt = now
-
-    if (action === 'block') {
-      self.guard = Math.min(100, self.guard + 55)
-      this.pushEvent(`${self.name} raises the guard`)
-      this.state.lastImpact = null
-      this.emit()
-      return { hit: false, damage: 0, blocked: false, dodged: false }
-    }
-
-    if (action === 'dodge') {
-      self.guard = Math.min(100, self.guard + 25)
-      this.pushEvent(`${self.name} slips the pocket`)
-      this.state.lastImpact = null
-      this.emit()
-      return { hit: false, damage: 0, blocked: false, dodged: true }
-    }
-
-    // Offensive: check opponent state
-    let damage = ACTION_DAMAGE[action]
-    let blocked = false
-    let dodged = false
-
-    if (opp.lastAction === 'dodge' && opp.lastActionAt && now - opp.lastActionAt < 700) {
-      dodged = true
-      damage = 0
-      this.pushEvent(`${opp.name} slips ${self.name}'s ${action.replace('_', ' ')}`)
-    } else if (opp.lastAction === 'block' && opp.lastActionAt && now - opp.lastActionAt < 650) {
-      blocked = true
-      const absorbed = Math.min(Math.max(opp.guard, 40), damage * 0.85)
-      damage = Math.max(1, damage - absorbed * 0.55)
-      opp.guard = Math.max(0, opp.guard - 40)
-      this.pushEvent(`${opp.name} blocks — still eats ${damage.toFixed(0)}`)
-    } else if (opp.guard > 55) {
-      // Stale high guard still helps a little, but doesn't freeze them in dance pose
-      blocked = true
-      damage = Math.max(2, damage * 0.7)
-      opp.guard = Math.max(0, opp.guard - 25)
-      this.pushEvent(`${opp.name} gloves up — still eats ${damage.toFixed(0)}`)
-    } else {
-      // Chin shot chance if opponent just punched (trading)
-      if (
-        opp.lastAction &&
-        ['jab', 'punch_left', 'punch_right'].includes(opp.lastAction) &&
-        opp.lastActionAt &&
-        now - opp.lastActionAt < 500
-      ) {
-        damage *= 1.35
-      }
-      this.pushEvent(
-        `${self.name} lands a ${action.replace('_', ' ')} for ${Math.round(damage)}`,
+    if (self.nextWindowAt && t + WINDOW_GRACE_MS < self.nextWindowAt) {
+      throw new Error(
+        `Window closed. Next open ~${Math.max(0, self.nextWindowAt - t)}ms`,
       )
     }
 
-    if (!dodged) {
-      opp.health = Math.max(0, opp.health - damage)
-      opp.guard = Math.max(0, opp.guard - 10)
+    const style: PhraseStyle = input.style ?? 'pressure'
+    const rawBeats = input.beats?.length ? input.beats.slice(0, 3) : [{ move: 'jab' as PhraseMove }]
+    const cost = this.phraseCost(rawBeats, style)
+    if (self.stamina < cost) {
+      throw new Error(`Gassed out — need ${cost} stamina (have ${Math.round(self.stamina)})`)
     }
 
-    // Stamina regen trickle for idle opponent
-    opp.stamina = Math.min(MAX_STAMINA, opp.stamina + 2)
-    self.guard = Math.max(0, self.guard - 15)
+    self.stamina = Math.max(0, self.stamina - cost)
+    const beats = this.scheduleBeats(rawBeats, t)
+    const phrase: ActivePhrase = {
+      id: randomUUID().slice(0, 8),
+      corner,
+      style,
+      beats,
+      startedAt: t,
+      endsAt: beats[beats.length - 1]!.at + 80,
+      resolved: [],
+    }
+
+    this.state.activePhrases = [...this.state.activePhrases, phrase]
+    self.nextWindowAt = phrase.endsAt + PHRASE_RECOVERY_MS
+    self.covering = false
+    this.coverLatch[corner] = 0
+    this.state.cardHeat = clamp(this.state.cardHeat + 2 + beats.length, 0, 100)
+
+    const telegraph = beats.map((b) => b.move).join(' → ')
+    this.pushEvent(`${self.name} loads a ${style} phrase: ${telegraph}`)
+    if (beats.length >= 3 || style === 'showboat') {
+      this.announce(ANNOUNCER.combo, 4)
+    } else {
+      this.emit()
+    }
+
+    return { ok: true as const, phrase, telegraph, nextWindowAt: self.nextWindowAt }
+  }
+
+  /** Single-action shortcut → 1-beat phrase (legacy tools / coach UI). */
+  applyAction(corner: Corner, action: FightAction) {
+    return this.throwPhrase(corner, {
+      style: action === 'block' || action === 'dodge' ? 'counter' : 'pressure',
+      beats: [{ move: action }],
+    })
+  }
+
+  private defenseUp(defender: FighterPublic, corner: Corner, at: number, want: 'block' | 'dodge') {
+    if (defender.covering) return true
+    const phrase = this.state.activePhrases.find((p) => p.corner === corner)
+    if (!phrase) return false
+    return phrase.beats.some(
+      (b) =>
+        (b.move === want || (want === 'block' && b.move === 'dodge')) &&
+        Math.abs(b.at - at) <= 280,
+    )
+  }
+
+  private resolveBeat(phrase: ActivePhrase, beatIndex: number) {
+    const beat = phrase.beats[beatIndex]
+    if (!beat || phrase.resolved.includes(beatIndex)) return
+
+    const attacker = this.state[phrase.corner]
+    const oppCorner: Corner = phrase.corner === 'red' ? 'blue' : 'red'
+    const defender = this.state[oppCorner]
+    const move = beat.move
+
+    phrase.resolved = [...phrase.resolved, beatIndex]
+
+    if (move === 'taunt') {
+      this.state.cardHeat = clamp(this.state.cardHeat + 6, 0, 100)
+      attacker.lastAction = null
+      attacker.lastActionAt = beat.at
+      this.pushEvent(`${attacker.name} showboats — the strip loves it`)
+      this.emit()
+      return
+    }
+
+    if (isDefense(move)) {
+      attacker.lastAction = move
+      attacker.lastActionAt = beat.at
+      attacker.guard = Math.min(100, attacker.guard + (move === 'block' ? 55 : 25))
+      // brief cover window while the defense beat is live
+      attacker.covering = true
+      this.later(move === 'dodge' ? 320 : 400, () => {
+        if (attacker.lastActionAt === beat.at) attacker.covering = false
+        this.emit()
+      })
+      this.pushEvent(
+        move === 'block'
+          ? `${attacker.name} gloves up`
+          : `${attacker.name} slips the pocket`,
+      )
+      this.emit()
+      return
+    }
+
+    if (!isAttack(move)) return
+
+    attacker.lastAction = move
+    attacker.lastActionAt = beat.at
+    attacker.guard = Math.max(0, attacker.guard - 12)
+
+    let damage = (MOVE_DAMAGE[move] ?? 8) * STYLE_DAMAGE[phrase.style]
+    let result: ImpactEvent['result'] = 'hit'
+
+    const dodgeWindow = this.defenseUp(defender, oppCorner, beat.at, 'dodge')
+    const blockWindow =
+      this.defenseUp(defender, oppCorner, beat.at, 'block') || defender.guard > 55
+
+    if (dodgeWindow && Math.random() < 0.75) {
+      result = 'dodged'
+      damage = 0
+      this.announce(ANNOUNCER.slip, 3)
+      this.pushEvent(`${defender.name} slips ${attacker.name}'s ${move.replace('_', ' ')}`)
+    } else if (blockWindow) {
+      result = 'blocked'
+      const absorbed = Math.min(Math.max(defender.guard, 35), damage * 0.85)
+      damage = Math.max(1, damage - absorbed * 0.55)
+      defender.guard = Math.max(0, defender.guard - 35)
+      defender.stamina = Math.max(0, defender.stamina - 3)
+      this.pushEvent(`${defender.name} blocks — still eats ${Math.round(damage)}`)
+    } else {
+      result = 'hit'
+      // trading bonus if foe also punching into it
+      const foePhrase = this.state.activePhrases.find((p) => p.corner === oppCorner)
+      const trading = foePhrase?.beats.some(
+        (b) => isAttack(b.move) && Math.abs(b.at - beat.at) <= 220,
+      )
+      if (trading) damage *= 1.28
+      if (damage >= 14 || Math.random() < (phrase.style === 'aggressive' ? 0.16 : 0.08)) {
+        this.announce(ANNOUNCER.bomb, 8)
+      }
+      this.pushEvent(
+        `${attacker.name} lands a ${move.replace('_', ' ')} for ${Math.round(damage)}`,
+      )
+      this.state.cardHeat = clamp(this.state.cardHeat + 3, 0, 100)
+    }
+
+    if (result !== 'dodged') {
+      defender.health = Math.max(0, defender.health - damage)
+      defender.guard = Math.max(0, defender.guard - 8)
+    }
 
     const impact: ImpactEvent = {
       id: randomUUID(),
-      at: now,
-      attacker: corner,
+      at: beat.at,
+      attacker: phrase.corner,
       defender: oppCorner,
-      action,
-      result: dodged ? 'dodged' : blocked ? 'blocked' : 'hit',
-      damage: dodged ? 0 : damage,
+      action: move,
+      result,
+      damage: result === 'dodged' ? 0 : damage,
     }
     this.state.lastImpact = impact
-
     this.emit()
 
-    if (opp.health <= 0) {
-      this.knockout(corner)
+    if (defender.health <= 0) {
+      this.knockout(phrase.corner)
+    }
+  }
+
+  private autoCover(corner: Corner, reason: string) {
+    const f = this.state[corner]
+    if (f.covering || this.hasActivePhrase(corner)) return
+    const t = Date.now()
+    f.covering = true
+    f.lastAction = 'block'
+    f.lastActionAt = t
+    f.guard = Math.min(100, f.guard + 40)
+    f.stamina = Math.max(0, f.stamina - 3)
+    f.nextWindowAt = Math.max(f.nextWindowAt ?? 0, t + COVER_MS + 100)
+    this.coverLatch[corner] = t
+    this.pushEvent(`${f.name} auto-covers (${reason})`)
+    this.announce(ANNOUNCER.cover, 2)
+    this.later(COVER_MS, () => {
+      f.covering = false
+      this.emit()
+    })
+  }
+
+  /**
+   * Heartbeat (~50ms): resolve due phrase beats, missed-window auto-cover,
+   * soft stamina regen, card heat cool-off.
+   */
+  tick() {
+    if (this.state.phase !== 'fighting') return
+    const t = Date.now()
+    let dirty = false
+
+    // Soft stamina regen when idle
+    for (const c of ['red', 'blue'] as Corner[]) {
+      const f = this.state[c]
+      if (!this.hasActivePhrase(c) && !f.covering) {
+        const before = f.stamina
+        f.stamina = Math.min(MAX_STAMINA, f.stamina + 0.12)
+        if (f.stamina !== before) dirty = true
+      }
     }
 
-    return { hit: !dodged && damage > 0, damage, blocked, dodged }
+    // Resolve due beats
+    for (const phrase of [...this.state.activePhrases]) {
+      for (let i = 0; i < phrase.beats.length; i++) {
+        if (phrase.resolved.includes(i)) continue
+        const beat = phrase.beats[i]!
+        if (beat.at > t) break
+        this.resolveBeat(phrase, i)
+        if (this.state.phase !== 'fighting') return
+        dirty = true
+      }
+    }
+
+    const beforeLen = this.state.activePhrases.length
+    this.state.activePhrases = this.state.activePhrases.filter(
+      (p) => p.resolved.length < p.beats.length,
+    )
+    if (this.state.activePhrases.length !== beforeLen) dirty = true
+
+    // Missed window → auto-cover (agents only — Vegas survival instinct)
+    for (const c of ['red', 'blue'] as Corner[]) {
+      const key = this.agentKeys[c]
+      if (!key || key.startsWith('demo-')) continue
+      const f = this.state[c]
+      if (!f.nextWindowAt || this.hasActivePhrase(c) || f.covering) continue
+      const overdue = t - f.nextWindowAt
+      if (overdue > 1200 && overdue < 2200 && this.coverLatch[c] < f.nextWindowAt) {
+        this.autoCover(c, 'missed exchange window')
+        dirty = true
+      }
+    }
+
+    // Card heat cools slowly
+    if (t - this.lastHeatTick > 400) {
+      this.lastHeatTick = t
+      const prev = this.state.cardHeat
+      this.state.cardHeat = clamp(this.state.cardHeat - 0.35, 0, 100)
+      if (this.state.cardHeat !== prev) dirty = true
+    }
+
+    if (dirty) this.emit()
+  }
+
+  /** Demo bots commit phrases on open windows — Vegas pacing, not button mash. */
+  tickDemoBots() {
+    if (this.state.phase !== 'fighting') return
+    const t = Date.now()
+    const lead: Corner = Math.floor(t / 1600) % 2 === 0 ? 'red' : 'blue'
+
+    for (const corner of [lead, lead === 'red' ? 'blue' : 'red'] as Corner[]) {
+      const key = this.agentKeys[corner]
+      if (!key?.startsWith('demo-')) continue
+      const fighter = this.state[corner]
+      if (fighter.knockedOut || fighter.covering) continue
+      if (this.hasActivePhrase(corner)) continue
+      if (fighter.nextWindowAt && t < fighter.nextWindowAt) continue
+
+      const isLead = corner === lead
+      if (isLead && Math.random() > 0.62) continue
+      if (!isLead && Math.random() > 0.34) continue
+
+      const opp = this.state[corner === 'red' ? 'blue' : 'red']
+      const oppPhrase = this.state.activePhrases.find((p) => p.corner === opp.corner)
+      const incoming = !!oppPhrase?.beats.some(
+        (b) => isAttack(b.move) && b.at - t < 450 && b.at - t > -50,
+      )
+
+      let input: ThrowPhraseInput
+      const roll = Math.random()
+      if (fighter.stamina < 18) {
+        input = { style: 'counter', beats: [{ move: 'block' }] }
+      } else if (incoming && !isLead) {
+        input =
+          roll > 0.45
+            ? { style: 'counter', beats: [{ move: 'dodge' }, { move: 'jab' }] }
+            : { style: 'counter', beats: [{ move: 'block' }, { move: 'punch_right' }] }
+      } else if (roll < 0.2) {
+        input = {
+          style: 'aggressive',
+          beats: [{ move: 'jab' }, { move: 'punch_left' }, { move: 'punch_right' }],
+        }
+      } else if (roll < 0.35) {
+        input = { style: 'showboat', beats: [{ move: 'taunt' }, { move: 'jab' }] }
+      } else if (roll < 0.55) {
+        input = { style: 'pressure', beats: [{ move: 'jab' }, { move: 'jab' }] }
+      } else if (roll < 0.7) {
+        input = {
+          style: 'pressure',
+          beats: [{ move: 'jab' }, { move: pick(['punch_left', 'punch_right'] as const) }],
+        }
+      } else {
+        input = {
+          style: 'pressure',
+          beats: [{ move: pick(['jab', 'punch_left', 'punch_right'] as const) }],
+        }
+      }
+
+      try {
+        this.throwPhrase(corner, input)
+      } catch {
+        // window / stamina
+      }
+
+      if (Math.random() > 0.93) {
+        const lines = [
+          'Your firmware is trash!',
+          'Eat canvas under the neon.',
+          'I oil my joints with your tears.',
+          'That all you got?',
+          'Coach said knock your block off.',
+          'Beep boop — KO incoming.',
+          'Vegas loves a finisher.',
+        ]
+        this.trashTalk(key, lines[Math.floor(Math.random() * lines.length)]!)
+      }
+    }
   }
 
   coachAdvicePush(corner: Corner, text: string) {
@@ -465,6 +837,7 @@ export class MatchEngine {
     const corner = this.cornerForAgent(agentKey)
     if (!corner) throw new Error('Unknown agent')
     const fighter = this.state[corner]
+    this.state.cardHeat = clamp(this.state.cardHeat + 3, 0, 100)
     return this.pushChat({
       from: 'agent',
       corner,
@@ -473,61 +846,80 @@ export class MatchEngine {
     })
   }
 
-  /** Lightweight autonomous demo tick — punch-heavy, readable beats */
-  tickDemoBots() {
-    if (this.state.phase !== 'fighting') return
+  /** Rich ring-side brief for WebMCP — telegraph, window, coach whisper. */
+  ringBriefFor(agentKey: string) {
+    const corner = this.cornerForAgent(agentKey)
+    const state = this.state
+    const t = Date.now()
+    const you = corner ? state[corner] : null
+    const foe = corner ? state[corner === 'red' ? 'blue' : 'red'] : null
+    const yourPhrase = corner
+      ? state.activePhrases.find((p) => p.corner === corner)
+      : undefined
+    const foePhrase = corner
+      ? state.activePhrases.find((p) => p.corner === (corner === 'red' ? 'blue' : 'red'))
+      : undefined
+    const msToWindow = you?.nextWindowAt ? Math.max(0, you.nextWindowAt - t) : 0
+    const windowOpen = !!(
+      you &&
+      !you.covering &&
+      !yourPhrase &&
+      (!you.nextWindowAt || t + WINDOW_GRACE_MS >= you.nextWindowAt)
+    )
 
-    const now = Date.now()
-    // One aggressor at a time so punches can be seen
-    const lead: Corner = Math.floor(now / 1400) % 2 === 0 ? 'red' : 'blue'
+    let coachWhisper = 'Stay patient — pick a phrase, don’t spam leather.'
+    if (state.phase === 'lobby') {
+      coachWhisper = 'Claim a corner and ready up when both sides are filled.'
+    } else if (state.phase === 'countdown') {
+      coachWhisper = 'Breathe. First phrase wins the optics.'
+    } else if (state.phase === 'between_rounds') {
+      coachWhisper = 'Rewrite the game plan. Heat carries over.'
+    } else if (state.phase === 'ended' || state.phase === 'decision' || state.phase === 'knockout') {
+      coachWhisper = 'Card’s closed. Rematch when the house is ready.'
+    } else if (you?.covering) {
+      coachWhisper = 'You’re covering — ride it out, then fire.'
+    } else if (!windowOpen) {
+      coachWhisper = `Window opens in ~${msToWindow}ms. Load the next phrase.`
+    } else if (foePhrase) {
+      coachWhisper = `Foe telegraph: ${foePhrase.beats.map((b) => b.move).join('→')}. Counter or cover.`
+    } else if ((you?.stamina ?? 0) < 25) {
+      coachWhisper = 'Gas tank low — jab phrases only, or block and breathe.'
+    } else if (state.cardHeat > 70) {
+      coachWhisper = 'Crowd is feral — a showboat phrase prints highlight reels.'
+    }
 
-    for (const corner of [lead, lead === 'red' ? 'blue' : 'red'] as Corner[]) {
-      const key = this.agentKeys[corner]
-      if (!key?.startsWith('demo-')) continue
-      const fighter = this.state[corner]
-      if (fighter.knockedOut) continue
-
-      const isLead = corner === lead
-      const minGap = isLead ? 700 : 1100
-      if (fighter.lastActionAt && now - fighter.lastActionAt < minGap) continue
-      // Lead throws often; trailing bot mostly waits / rare counter
-      if (isLead && Math.random() > 0.55) continue
-      if (!isLead && Math.random() > 0.28) continue
-
-      const opp = this.state[corner === 'red' ? 'blue' : 'red']
-      let action: FightAction
-      const oppPunching =
-        !!opp.lastAction &&
-        ['jab', 'punch_left', 'punch_right'].includes(opp.lastAction) &&
-        !!opp.lastActionAt &&
-        now - opp.lastActionAt < 380
-
-      if (fighter.stamina < 15) action = 'block'
-      else if (oppPunching && !isLead) action = Math.random() > 0.5 ? 'block' : 'dodge'
-      else {
-        // Almost always punch — dancing was from block spam + idle shake
-        const bag: FightAction[] = isLead
-          ? ['jab', 'punch_left', 'punch_right', 'punch_left', 'jab', 'punch_right']
-          : ['jab', 'punch_right', 'jab', 'block']
-        action = bag[Math.floor(Math.random() * bag.length)]!
-      }
-      try {
-        this.applyAction(corner, action)
-      } catch {
-        // cooldown / stamina
-      }
-
-      if (Math.random() > 0.95) {
-        const lines = [
-          'Your firmware is trash!',
-          'Eat canvas, tin can.',
-          'I oil my joints with your tears.',
-          'That all you got?',
-          'Coach said knock your block off.',
-          'Beep boop — KO incoming.',
-        ]
-        this.trashTalk(key, lines[Math.floor(Math.random() * lines.length)]!)
-      }
+    return {
+      matchId: state.id,
+      phase: state.phase,
+      round: state.round,
+      cardHeat: Math.round(state.cardHeat),
+      announcerLine: state.announcerLine,
+      corner,
+      you,
+      foe,
+      windowOpen,
+      msToWindow,
+      yourPhrase: yourPhrase
+        ? {
+            style: yourPhrase.style,
+            remaining: yourPhrase.beats
+              .filter((_, i) => !yourPhrase.resolved.includes(i))
+              .map((b) => b.move),
+          }
+        : null,
+      foeTelegraph: foePhrase
+        ? {
+            style: foePhrase.style,
+            beats: foePhrase.beats.map((b) => b.move),
+            nextBeatInMs: Math.max(
+              0,
+              (foePhrase.beats.find((_, i) => !foePhrase.resolved.includes(i))?.at ?? t) - t,
+            ),
+          }
+        : null,
+      lastImpact: state.lastImpact,
+      coachWhisper,
+      tip: 'throw_phrase with 1–3 beats (jab/punch_left/punch_right/block/dodge/taunt). Server owns timing.',
     }
   }
 }

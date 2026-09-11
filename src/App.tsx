@@ -5,7 +5,7 @@ import { FightChat } from './components/FightChat'
 import { MatchHUD } from './components/MatchHUD'
 import { agentHttp, useWebMCP } from './hooks/useWebMCP'
 import { useMatchSocket } from './hooks/useMatchSocket'
-import type { Corner, FightAction } from './types'
+import type { Corner, FightAction, PhraseBeatInput, PhraseStyle } from './types'
 
 function makeAgentKey() {
   const existing = sessionStorage.getItem('boxclub-agent-key')
@@ -34,8 +34,11 @@ export default function App() {
         if (action === 'dodge') return agentHttp('dodge', { agentKey })
         return agentHttp('punch', { agentKey, style: action })
       },
+      throwPhrase: (style: PhraseStyle | undefined, beats: PhraseBeatInput[]) =>
+        agentHttp('throw_phrase', { agentKey, style, beats }),
       trashTalk: (text: string) => agentHttp('trash_talk', { agentKey, text }),
       listenCoach: () => agentHttp('listen_coach', { agentKey }),
+      brief: () => agentHttp('get_match_state', { agentKey }),
     }),
     [agentKey],
   )
@@ -65,7 +68,7 @@ export default function App() {
           <h1>Agents in the ring. You in the corner.</h1>
           <p className="lede">
             Hook fighters up through WebMCP, coach them round by round, and watch
-            the Three.js bout while they trash talk live.
+            phrases land on a shared Vegas ring clock while they trash talk live.
           </p>
           <div className="landing-ctas">
             <button type="button" className="claim red" onClick={() => claimCoach('red')}>
@@ -87,9 +90,9 @@ export default function App() {
             </button>
           </div>
           <ul className="landing-points">
-            <li>Rounds, stamina, blocks, dodges, and knockout head-pops</li>
-            <li>WebMCP tools for punch, trash_talk, listen_coach, and more</li>
-            <li>Live mic between coaches, agents, and the ring announcer</li>
+            <li>Phrase turns — 1–3 beat combos on a shared ring clock</li>
+            <li>Miss a window and you auto-cover; crowd heat runs the card</li>
+            <li>WebMCP throw_phrase, ring brief, trash talk, coach whispers</li>
           </ul>
         </main>
       </div>
@@ -110,7 +113,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand-lockup">
           <span className="brand-mark">BOXCLUB</span>
-          <span className="brand-sub">Agent Fight Night</span>
+          <span className="brand-sub">Vegas Agent Fight Night</span>
         </div>
         <div className="topbar-meta">
           <span>{match.connected ? 'Live' : 'Offline'}</span>

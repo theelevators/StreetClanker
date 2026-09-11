@@ -8,6 +8,8 @@ import type {
   ClientMessage,
   Corner,
   FightAction,
+  PhraseBeatInput,
+  PhraseStyle,
   ServerMessage,
 } from '../shared/types.ts'
 import { MatchEngine } from './match.ts'
@@ -37,7 +39,8 @@ const engine = new MatchEngine(
   (message) => broadcast({ type: 'chat', message }),
 )
 
-setInterval(() => engine.tickDemoBots(), 280)
+setInterval(() => engine.tick(), 50)
+setInterval(() => engine.tickDemoBots(), 320)
 
 function send(ws: WebSocket, msg: ServerMessage) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg))
@@ -73,19 +76,25 @@ app.get('/api/tools', (_req, res) => {
       },
       {
         name: 'get_match_state',
-        description: 'Read live fight state: health, stamina, round, phase, opponent.',
+        description:
+          'Ring brief: phase, window timing, foe telegraph, card heat, coach whisper.',
+      },
+      {
+        name: 'throw_phrase',
+        description:
+          'Commit a 1–3 beat phrase (combo) on the shared ring clock. Primary fight tool.',
       },
       {
         name: 'punch',
-        description: 'Throw a punch: jab, punch_left, or punch_right.',
+        description: 'Shortcut: 1-beat punch phrase (jab | punch_left | punch_right).',
       },
       {
         name: 'block',
-        description: 'Raise your guard to absorb incoming damage.',
+        description: 'Shortcut: 1-beat block phrase.',
       },
       {
         name: 'dodge',
-        description: 'Slip an incoming punch for a short window.',
+        description: 'Shortcut: 1-beat dodge phrase.',
       },
       {
         name: 'trash_talk',
@@ -138,7 +147,26 @@ app.post('/api/agent/:action', (req, res) => {
         return
       }
       case 'get_match_state': {
-        res.json({ ok: true, state: engine.getState(), corner: engine.cornerForAgent(agentKey) })
+        res.json({
+          ok: true,
+          brief: engine.ringBriefFor(agentKey),
+          state: engine.getState(),
+          corner: engine.cornerForAgent(agentKey),
+        })
+        return
+      }
+      case 'throw_phrase': {
+        const corner = engine.cornerForAgent(agentKey)
+        if (!corner) throw new Error('Claim a corner first')
+        const beats = (body.beats as PhraseBeatInput[] | undefined) ?? []
+        const style = body.style as PhraseStyle | undefined
+        const result = engine.throwPhrase(corner, { style, beats })
+        res.json({
+          ok: true,
+          result,
+          brief: engine.ringBriefFor(agentKey),
+          state: engine.getState(),
+        })
         return
       }
       case 'punch': {
@@ -149,7 +177,12 @@ app.post('/api/agent/:action', (req, res) => {
           throw new Error('style must be jab | punch_left | punch_right')
         }
         const result = engine.applyAction(corner, style)
-        res.json({ ok: true, result, state: engine.getState() })
+        res.json({
+          ok: true,
+          result,
+          brief: engine.ringBriefFor(agentKey),
+          state: engine.getState(),
+        })
         return
       }
       case 'block': {
@@ -284,6 +317,12 @@ function handleMessage(ws: WebSocket, msg: ClientMessage) {
       const corner = engine.cornerForAgent(msg.agentKey)
       if (!corner) throw new Error('Claim a corner first')
       engine.applyAction(corner, msg.action)
+      break
+    }
+    case 'agent_throw_phrase': {
+      const corner = engine.cornerForAgent(msg.agentKey)
+      if (!corner) throw new Error('Claim a corner first')
+      engine.throwPhrase(corner, { style: msg.style, beats: msg.beats })
       break
     }
     case 'agent_trash_talk': {

@@ -113,12 +113,14 @@ export function stepFighterAnim(opts: {
     iAmDefender && lastImpact?.result === 'blocked' && impactAge < 0.4
   const landedHit = iAmAttacker && lastImpact?.result === 'hit' && impactAge < 0.45
 
-  const activelyBlocking = action === 'block' && actionAge < 0.7
-  const activelyDodging = action === 'dodge' && actionAge < 0.55
+  const activelyBlocking =
+    fighter.covering || (action === 'block' && actionAge < 0.7)
+  const activelyDodging = action === 'dodge' && actionAge < 0.55 && !fighter.covering
   const activelyPunching =
     !!action &&
     ['jab', 'punch_left', 'punch_right'].includes(action) &&
-    actionAge < 0.85
+    actionAge < 0.85 &&
+    !fighter.covering
 
   let targetX = homeX
   let targetY = 0

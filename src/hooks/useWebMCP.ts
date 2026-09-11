@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Corner, FightAction, MatchState } from '../types'
+import type {
+  Corner,
+  FightAction,
+  MatchState,
+  PhraseBeatInput,
+  PhraseStyle,
+} from '../types'
 
 type ToolResult = string | Record<string, unknown>
 
@@ -21,7 +27,7 @@ type RegisterToolInput = {
 type ModelContext = {
   registerTool: (
     tool: RegisterToolInput,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortController['signal'] },
   ) => Promise<void> | void
 }
 
@@ -47,8 +53,13 @@ type Options = {
     join: (corner: Corner, name: string) => Promise<ToolResult>
     ready: () => Promise<ToolResult>
     action: (action: FightAction) => Promise<ToolResult>
+    throwPhrase: (
+      style: PhraseStyle | undefined,
+      beats: PhraseBeatInput[],
+    ) => Promise<ToolResult>
     trashTalk: (text: string) => Promise<ToolResult>
     listenCoach: () => Promise<ToolResult>
+    brief: () => Promise<ToolResult>
   }
 }
 
@@ -88,7 +99,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'claim_corner',
         description:
-          'Join BoxClub as a fighting agent. Pick red or blue corner and a fighter name. Human coaches sit ringside; you throw the punches.',
+          'Join BoxClub as a fighting agent. Pick red or blue corner and a fighter name. Human coaches sit ringside; you throw the phrases.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -121,29 +132,65 @@ export function useWebMCP(options: Options) {
       {
         name: 'get_match_state',
         description:
-          'Read the live match: phase, round timers, your health/stamina, opponent status, and recent events. Call often between punches.',
+          'Vegas ring brief: phase, your window timing, foe telegraph, card heat, announcer line, coach whisper. Call between phrases.',
         inputSchema: { type: 'object', properties: {} },
         annotations: { readOnlyHint: true },
-        execute: wrap('get_match_state', async () => {
-          const state = optionsRef.current.getState()
-          if (!state) return { error: 'No match state yet' }
-          return {
-            phase: state.phase,
-            round: state.round,
-            maxRounds: state.maxRounds,
-            roundEndsAt: state.roundEndsAt,
-            winner: state.winner,
-            red: state.red,
-            blue: state.blue,
-            recentEvents: state.eventLog.slice(0, 8),
-            recentChat: state.chat.slice(-6),
-          }
+        execute: wrap('get_match_state', async () => optionsRef.current.sendAgent.brief()),
+      },
+      {
+        name: 'throw_phrase',
+        description:
+          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase on the shared ring clock. Server owns timing — you commit intent (jab/punch_left/punch_right/block/dodge/taunt). Styles: aggressive, counter, pressure, showboat. Miss your window and you auto-cover.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            style: {
+              type: 'string',
+              enum: ['aggressive', 'counter', 'pressure', 'showboat'],
+            },
+            beats: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 3,
+              items: {
+                type: 'object',
+                properties: {
+                  move: {
+                    type: 'string',
+                    enum: [
+                      'jab',
+                      'punch_left',
+                      'punch_right',
+                      'block',
+                      'dodge',
+                      'taunt',
+                    ],
+                  },
+                  at: {
+                    type: 'number',
+                    description:
+                      'Optional ms offset from phrase start. Omit to let the ring space beats.',
+                  },
+                },
+                required: ['move'],
+              },
+            },
+          },
+          required: ['beats'],
+        },
+        annotations: { consequentialHint: true },
+        execute: wrap('throw_phrase', async (args) => {
+          const beats = (args.beats as PhraseBeatInput[]) ?? []
+          return optionsRef.current.sendAgent.throwPhrase(
+            args.style as PhraseStyle | undefined,
+            beats,
+          )
         }),
       },
       {
         name: 'punch',
         description:
-          'Throw a punch during a live round. jab is fast/light; punch_left and punch_right are heavier hooks. Respect stamina and cooldown.',
+          'Shortcut: commit a 1-beat punch phrase. Prefer throw_phrase for combos.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -160,7 +207,7 @@ export function useWebMCP(options: Options) {
       },
       {
         name: 'block',
-        description: 'Raise your guard to absorb incoming damage.',
+        description: 'Shortcut: 1-beat block phrase. Prefer throw_phrase for counter setups.',
         inputSchema: { type: 'object', properties: {} },
         execute: wrap('block', async () =>
           optionsRef.current.sendAgent.action('block'),
@@ -168,7 +215,7 @@ export function useWebMCP(options: Options) {
       },
       {
         name: 'dodge',
-        description: 'Slip for a short window to avoid a punch.',
+        description: 'Shortcut: 1-beat dodge phrase.',
         inputSchema: { type: 'object', properties: {} },
         execute: wrap('dodge', async () =>
           optionsRef.current.sendAgent.action('dodge'),

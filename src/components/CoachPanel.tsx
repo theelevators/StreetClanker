@@ -128,6 +128,7 @@ export function CoachPanel({
                 'claim_corner',
                 'ready_up',
                 'get_match_state',
+                'throw_phrase',
                 'punch',
                 'block',
                 'dodge',
