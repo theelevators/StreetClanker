@@ -8,10 +8,12 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
-dist-ssr
+/dist
+/dist-ssr
 *.local
 
+# Vendored mob3 builds (package is not published to npm yet)
+!vendor/**/dist/
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -22,3 +24,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# keep vendored mob3 free of nested installs
+vendor/**/node_modules/
+vendor/**/tsconfig.tsbuildinfo

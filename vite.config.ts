@@ -13,4 +13,16 @@ export default defineConfig({
       },
     },
   },
+  define: {
+    // Keep mob3's isNode() checks false in the browser bundle
+    'process.versions.node': 'undefined',
+  },
+  optimizeDeps: {
+    include: ['mob3', '@mob3/three', '@mob3/assets', 'three'],
+  },
+  build: {
+    commonjsOptions: {
+      include: [/node_modules/, /vendor/],
+    },
+  },
 })

@@ -1,0 +1,30 @@
+{
+  "name": "@mob3/assets",
+  "version": "0.1.0",
+  "description": "Typed assets and async lifecycle for mob3 (renderer-agnostic)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "mob3": "file:../mob3"
+  },
+  "devDependencies": {},
+  "license": "MIT",
+  "dependencies": {}
+}

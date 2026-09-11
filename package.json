@@ -10,14 +10,16 @@
     "build": "tsc -b && vite build",
     "start": "tsx server/index.ts",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "postinstall": "rm -rf vendor/mob3/node_modules vendor/mob3-assets/node_modules vendor/mob3-three/node_modules"
   },
   "dependencies": {
-    "@react-three/drei": "^10.7.8",
-    "@react-three/fiber": "^9.7.0",
+    "@mob3/assets": "file:vendor/mob3-assets",
+    "@mob3/three": "file:vendor/mob3-three",
     "@types/three": "^0.185.4",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "mob3": "file:vendor/mob3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "three": "^0.185.1",
