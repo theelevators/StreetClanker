@@ -58,11 +58,12 @@ function setupScene(world: World) {
   scene.fog = new THREE.Fog('#1c1410', 8, 18)
   renderer.shadowMap.enabled = true
 
-  camera.fov = 42
+  camera.fov = 48
   camera.near = 0.1
   camera.far = 100
-  camera.position.set(3.8, 3.2, 4.6)
-  camera.lookAt(0, 0.75, 0)
+  // Closer + wider so the ring fills the fullscreen play surface behind the HUD
+  camera.position.set(2.9, 2.55, 3.55)
+  camera.lookAt(0, 0.95, 0)
   camera.updateProjectionMatrix()
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.45))
@@ -126,9 +127,9 @@ function setupScene(world: World) {
   world.insertResource(CameraShake, {
     shake: 0,
     lastImpactId: null,
-    baseX: 3.8,
-    baseY: 3.2,
-    baseZ: 4.6,
+    baseX: 2.9,
+    baseY: 2.55,
+    baseZ: 3.55,
   })
 }
 
@@ -428,10 +429,10 @@ function animateCamera(world: World) {
     shake.shake *= 0.84
   }
 
-  const wantFov = fighting ? 42 - heatKick * 16 : 42
-  camera.fov = THREE.MathUtils.lerp(camera.fov ?? 42, wantFov, 0.05)
+  const wantFov = fighting ? 48 - heatKick * 14 : 48
+  camera.fov = THREE.MathUtils.lerp(camera.fov ?? 48, wantFov, 0.05)
   camera.updateProjectionMatrix()
 
   camera.position.lerp(desired, 0.05)
-  camera.lookAt(lookX * 0.4, 0.72 + Math.max(0, 1.4 - spread) * 0.05, 0)
+  camera.lookAt(lookX * 0.4, 0.95 + Math.max(0, 1.4 - spread) * 0.05, 0)
 }

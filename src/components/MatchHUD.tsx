@@ -81,7 +81,7 @@ export function MatchHUD({ state }: Props) {
             style={{ ['--heat' as string]: `${heat}%` }}
             aria-label={`Card heat ${Math.round(heat)}`}
           >
-            <span className="card-heat-label">CARD HEAT</span>
+            <span className="card-heat-label">HEAT</span>
             <div className="card-heat-track">
               <div className="card-heat-fill" />
             </div>
@@ -96,7 +96,6 @@ export function MatchHUD({ state }: Props) {
         />
       </div>
 
-      {/* Always reserve banner height so hits don't shove the page */}
       <div
         className={`announcer-slot${announcerFresh ? ' is-live' : ''}`}
         aria-live="polite"

@@ -15,11 +15,14 @@ function makeAgentKey() {
   return key
 }
 
+type Drawer = 'none' | 'coach' | 'mic'
+
 export default function App() {
   const match = useMatchSocket()
   const [coachCorner, setCoachCorner] = useState<Corner | null>(null)
   const [coachName] = useState('Coach')
   const [entered, setEntered] = useState(false)
+  const [drawer, setDrawer] = useState<Drawer>('none')
   const agentKey = useMemo(() => makeAgentKey(), [])
   const stateRef = useMemo(() => ({ current: match.state }), [])
   stateRef.current = match.state
@@ -54,28 +57,36 @@ export default function App() {
       setCoachCorner(corner)
       match.joinAsCoach(corner, coachName)
       setEntered(true)
+      setDrawer('coach')
     },
     [match, coachName],
   )
 
+  const toggleDrawer = useCallback((next: Drawer) => {
+    setDrawer((prev) => (prev === next ? 'none' : next))
+  }, [])
+
   if (!entered) {
     return (
-      <div className="landing">
-        <div className="landing-glow" />
-        <div className="landing-grid" />
-        <main className="landing-main">
+      <div className="title-screen">
+        <div className="title-stage" aria-hidden="true">
+          <div className="title-glow" />
+          <div className="title-grid" />
+          <div className="title-ring-mark" />
+        </div>
+        <main className="title-main">
           <p className="brand-mark">BOXCLUB</p>
-          <h1>Agents in the ring. You in the corner.</h1>
+          <h1>Vegas Agent Fight Night</h1>
           <p className="lede">
-            Hook fighters up through WebMCP, coach them round by round, and watch
-            phrases land on a shared Vegas ring clock while they trash talk live.
+            Lace up. Throw phrases on a shared ring clock. The crowd heat decides
+            who gets famous under the neon.
           </p>
-          <div className="landing-ctas">
+          <div className="title-ctas">
             <button type="button" className="claim red" onClick={() => claimCoach('red')}>
-              Coach Red Corner
+              Coach Red
             </button>
             <button type="button" className="claim blue" onClick={() => claimCoach('blue')}>
-              Coach Blue Corner
+              Coach Blue
             </button>
             <button
               type="button"
@@ -86,14 +97,10 @@ export default function App() {
               }}
               disabled={!match.connected}
             >
-              Watch a Demo Bout
+              Enter Demo Bout
             </button>
           </div>
-          <ul className="landing-points">
-            <li>Phrase turns — 1–3 beat combos on a shared ring clock</li>
-            <li>Miss a window and you auto-cover; crowd heat runs the card</li>
-            <li>WebMCP throw_phrase, ring brief, trash talk, coach whispers</li>
-          </ul>
+          <p className="title-hint">Press in — the ring is the whole screen.</p>
         </main>
       </div>
     )
@@ -109,25 +116,59 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="brand-lockup">
-          <span className="brand-mark">BOXCLUB</span>
-          <span className="brand-sub">Vegas Agent Fight Night</span>
-        </div>
-        <div className="topbar-meta">
-          <span>{match.connected ? 'Live' : 'Offline'}</span>
-          <button type="button" className="ghost compact" onClick={match.resetMatch}>
-            New Bout
-          </button>
-        </div>
-      </header>
-
-      <MatchHUD state={match.state} />
-
-      <div className="stage">
+    <div className={`fight-screen${drawer !== 'none' ? ' drawer-open' : ''}`}>
+      <div className="ring-stage">
         <Arena state={match.state} />
-        <aside className="side-rail">
+
+        <div className="ring-overlay">
+          <header className="ring-chrome">
+            <div className="ring-brand">
+              <span className="ring-logo">BOXCLUB</span>
+              <span className="ring-live">
+                <i className={match.connected ? 'on' : 'off'} />
+                {match.connected ? 'LIVE' : 'OFF'}
+              </span>
+            </div>
+            <div className="ring-actions">
+              <button
+                type="button"
+                className={`chrome-btn${drawer === 'coach' ? ' active' : ''}`}
+                onClick={() => toggleDrawer('coach')}
+              >
+                Corner
+              </button>
+              <button
+                type="button"
+                className={`chrome-btn${drawer === 'mic' ? ' active' : ''}`}
+                onClick={() => toggleDrawer('mic')}
+              >
+                Mic
+              </button>
+              <button type="button" className="chrome-btn ghost" onClick={match.resetMatch}>
+                New Bout
+              </button>
+            </div>
+          </header>
+
+          <MatchHUD state={match.state} />
+
+          <footer className="ring-ticker" aria-live="polite">
+            {match.state.eventLog.slice(0, 3).map((e, i) => (
+              <span key={`${e}-${i}`}>{e}</span>
+            ))}
+          </footer>
+        </div>
+
+        {drawer !== 'none' && (
+          <button
+            type="button"
+            className="drawer-scrim"
+            aria-label="Close panel"
+            onClick={() => setDrawer('none')}
+          />
+        )}
+
+        <aside className={`ring-drawer${drawer === 'coach' ? ' open' : ''}`} aria-hidden={drawer !== 'coach'}>
           <CoachPanel
             state={match.state}
             connected={match.connected}
@@ -143,6 +184,9 @@ export default function App() {
             error={match.error}
             onClearError={match.clearError}
           />
+        </aside>
+
+        <aside className={`ring-drawer mic${drawer === 'mic' ? ' open' : ''}`} aria-hidden={drawer !== 'mic'}>
           <FightChat
             state={match.state}
             coachCorner={coachCorner}
@@ -150,12 +194,6 @@ export default function App() {
           />
         </aside>
       </div>
-
-      <footer className="event-ticker" aria-live="polite">
-        {match.state.eventLog.slice(0, 4).map((e, i) => (
-          <span key={`${e}-${i}`}>{e}</span>
-        ))}
-      </footer>
     </div>
   )
 }
