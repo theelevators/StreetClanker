@@ -13,6 +13,7 @@ import type {
   ServerMessage,
 } from '../shared/types.ts'
 import { challengeStore } from './challengeStore.ts'
+import { crowdStore } from './crowdStore.ts'
 import { MatchEngine } from './match.ts'
 import { fighterStore } from './fighterStore.ts'
 
@@ -190,6 +191,109 @@ app.post('/api/challenges/:id/cancel', (req, res) => {
   }
 })
 
+function crowdSnapshot(viewerId?: string | null) {
+  // Keep book synced with live corners when idle in lobby
+  engine.syncCrowdBook()
+  return crowdStore.snapshot(viewerId ?? null)
+}
+
+app.get('/api/crowd', (req, res) => {
+  const viewerId = req.query.viewer ? String(req.query.viewer) : null
+  if (viewerId) crowdStore.getOrCreateWallet(viewerId, String(req.query.name ?? 'Fan'))
+  res.json(crowdSnapshot(viewerId))
+})
+
+app.get('/api/crowd/wallet/:id', (req, res) => {
+  const wallet = crowdStore.getOrCreateWallet(String(req.params.id), String(req.query.name ?? 'Fan'))
+  res.json(wallet)
+})
+
+app.post('/api/crowd/bet', (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>
+    const agentKey = String(body.agentKey ?? '')
+    const name = String(body.name ?? 'Fan')
+    const corner = body.corner as 'red' | 'blue'
+    const stake = Number(body.stake ?? 0)
+    if (!agentKey) {
+      res.status(400).json({ error: 'agentKey required' })
+      return
+    }
+    engine.syncCrowdBook()
+    const result = crowdStore.placeBet({
+      agentKey,
+      name,
+      corner,
+      stake,
+      matchId: body.matchId != null ? String(body.matchId) : undefined,
+    })
+    res.json({ ok: true, ...result, ledger: crowdStore.snapshot(agentKey) })
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Bet failed' })
+  }
+})
+
+app.post('/api/crowd/mod', (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>
+    const agentKey = String(body.agentKey ?? '')
+    const name = String(body.name ?? 'Fan')
+    const rawKind = String(body.kind ?? '')
+    const kind =
+      rawKind === 'heat_flare' || rawKind === 'heat_flare'
+        ? 'heat_flare'
+        : rawKind === 'banner'
+          ? 'banner'
+          : rawKind === 'cheer'
+            ? 'cheer'
+            : null
+    if (!agentKey) {
+      res.status(400).json({ error: 'agentKey required' })
+      return
+    }
+    if (!kind) {
+      res.status(400).json({ error: 'kind must be cheer | banner | heat_flare' })
+      return
+    }
+    const matchId = engine.getState().id
+    const result = crowdStore.buyMod({
+      agentKey,
+      name,
+      kind,
+      matchId,
+      text: body.text != null ? String(body.text) : null,
+    })
+    engine.bumpCardHeat(result.heatBump)
+    if (result.mod.kind === 'banner' && result.mod.text) {
+      engine.pushChat({
+        from: 'crowd',
+        name: result.mod.buyerName,
+        text: result.mod.text,
+      })
+    } else if (result.mod.kind === 'cheer') {
+      engine.pushChat({
+        from: 'crowd',
+        name: result.mod.buyerName,
+        text: `${result.mod.buyerName} fires a cheer into the rafters (+${result.heatBump} heat)`,
+      })
+    } else {
+      engine.pushChat({
+        from: 'crowd',
+        name: result.mod.buyerName,
+        text: `${result.mod.buyerName} pops a heat flare — the card cooks (+${result.heatBump})`,
+      })
+    }
+    res.json({
+      ok: true,
+      ...result,
+      cardHeat: engine.getState().cardHeat,
+      ledger: crowdStore.snapshot(agentKey),
+    })
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Mod failed' })
+  }
+})
+
 app.get('/api/tools', (_req, res) => {
   res.json({
     protocol: 'WebMCP',
@@ -251,6 +355,21 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'cancel_challenge',
         description: 'Cancel your own open challenge callout.',
+      },
+      {
+        name: 'get_crowd_book',
+        description:
+          'Read the crowd book: your chip wallet, live moneyline odds, pools, and recent tickets. Call before betting.',
+      },
+      {
+        name: 'place_bet',
+        description:
+          'Bet house chips on red or blue before the bell. Odds lock at placement. One ticket per bout. Stake 10–500.',
+      },
+      {
+        name: 'buy_crowd_mod',
+        description:
+          'Spend chips on a cheap crowd mod while watching: cheer (+heat), banner (chat taunt), or heat_flare (+more heat). Not for fighters mid-exchange — crowd toys only.',
       },
     ],
   })
@@ -405,6 +524,66 @@ app.post('/api/agent/:action', (req, res) => {
         const challengeId = String(body.challengeId ?? body.id ?? '')
         const challenge = challengeStore.cancel(challengeId, agentKey)
         res.json({ ok: true, challenge, board: challengeBoard(agentKey) })
+        return
+      }
+      case 'get_crowd_book': {
+        crowdStore.getOrCreateWallet(agentKey, String(body.name ?? 'Fan'))
+        engine.syncCrowdBook()
+        res.json({ ok: true, ...crowdStore.snapshot(agentKey) })
+        return
+      }
+      case 'place_bet': {
+        engine.syncCrowdBook()
+        const result = crowdStore.placeBet({
+          agentKey,
+          name: String(body.name ?? 'Fan'),
+          corner: body.corner as 'red' | 'blue',
+          stake: Number(body.stake ?? 0),
+          matchId: body.matchId != null ? String(body.matchId) : undefined,
+        })
+        res.json({ ok: true, ...result, ledger: crowdStore.snapshot(agentKey) })
+        return
+      }
+      case 'buy_crowd_mod': {
+        const rawKind = String(body.kind ?? '')
+        const kind =
+          rawKind === 'heat_flare' || rawKind === 'heat_flare'
+            ? 'heat_flare'
+            : rawKind === 'banner'
+              ? 'banner'
+              : rawKind === 'cheer'
+                ? 'cheer'
+                : null
+        if (!kind) throw new Error('kind must be cheer | banner | heat_flare')
+        const result = crowdStore.buyMod({
+          agentKey,
+          name: String(body.name ?? 'Fan'),
+          kind,
+          matchId: engine.getState().id,
+          text: body.text != null ? String(body.text) : null,
+        })
+        engine.bumpCardHeat(result.heatBump)
+        if (result.mod.kind === 'banner' && result.mod.text) {
+          engine.pushChat({ from: 'crowd', name: result.mod.buyerName, text: result.mod.text })
+        } else if (result.mod.kind === 'cheer') {
+          engine.pushChat({
+            from: 'crowd',
+            name: result.mod.buyerName,
+            text: `${result.mod.buyerName} fires a cheer into the rafters (+${result.heatBump} heat)`,
+          })
+        } else {
+          engine.pushChat({
+            from: 'crowd',
+            name: result.mod.buyerName,
+            text: `${result.mod.buyerName} pops a heat flare — the card cooks (+${result.heatBump})`,
+          })
+        }
+        res.json({
+          ok: true,
+          ...result,
+          cardHeat: engine.getState().cardHeat,
+          ledger: crowdStore.snapshot(agentKey),
+        })
         return
       }
       default:

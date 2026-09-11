@@ -68,6 +68,17 @@ type Options = {
     listChallenges: () => Promise<ToolResult>
     acceptChallenge: (challengeId: string, name: string) => Promise<ToolResult>
     cancelChallenge: (challengeId: string) => Promise<ToolResult>
+    getCrowdBook: () => Promise<ToolResult>
+    placeBet: (input: {
+      corner: Corner
+      stake: number
+      name?: string
+    }) => Promise<ToolResult>
+    buyCrowdMod: (input: {
+      kind: 'cheer' | 'banner' | 'heat_flare'
+      name?: string
+      text?: string | null
+    }) => Promise<ToolResult>
   }
 }
 
@@ -332,6 +343,63 @@ export function useWebMCP(options: Options) {
           optionsRef.current.sendAgent.cancelChallenge(
             String(args.challengeId ?? args.id ?? ''),
           ),
+        ),
+      },
+      {
+        name: 'get_crowd_book',
+        description:
+          'Read the crowd book: your chip wallet, live moneyline odds, pools, and recent tickets. Call before betting.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { readOnlyHint: true },
+        execute: wrap('get_crowd_book', async () =>
+          optionsRef.current.sendAgent.getCrowdBook(),
+        ),
+      },
+      {
+        name: 'place_bet',
+        description:
+          'Bet house chips on red or blue before the bell. Odds lock at placement. One ticket per bout. Stake 10–500.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            corner: { type: 'string', enum: ['red', 'blue'] },
+            stake: { type: 'number', description: 'Chip stake (10–500)' },
+            name: { type: 'string', description: 'Display name on the ticket' },
+          },
+          required: ['corner', 'stake'],
+        },
+        annotations: { consequentialHint: true },
+        execute: wrap('place_bet', async (args) =>
+          optionsRef.current.sendAgent.placeBet({
+            corner: args.corner as Corner,
+            stake: Number(args.stake ?? 0),
+            name: args.name != null ? String(args.name) : undefined,
+          }),
+        ),
+      },
+      {
+        name: 'buy_crowd_mod',
+        description:
+          'Spend chips on a cheap crowd mod while watching: cheer (+heat), banner (chat taunt), or heat_flare (+more heat). Crowd toys — not fight powerups.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            kind: {
+              type: 'string',
+              enum: ['cheer', 'banner', 'heat_flare'],
+            },
+            name: { type: 'string' },
+            text: { type: 'string', description: 'Banner text (banner only)' },
+          },
+          required: ['kind'],
+        },
+        annotations: { consequentialHint: true },
+        execute: wrap('buy_crowd_mod', async (args) =>
+          optionsRef.current.sendAgent.buyCrowdMod({
+            kind: args.kind as 'cheer' | 'banner' | 'heat_flare',
+            name: args.name != null ? String(args.name) : undefined,
+            text: args.text != null ? String(args.text) : null,
+          }),
         ),
       },
     ]

@@ -17,6 +17,7 @@ import type {
   ThrowPhraseInput,
 } from '../shared/types.ts'
 import { fighterStore, formatRecord } from './fighterStore.ts'
+import { crowdStore } from './crowdStore.ts'
 
 const ROUND_MS = 45_000
 const COUNTDOWN_MS = 3_000
@@ -308,8 +309,31 @@ export class MatchEngine {
       if (this.state.blue.id) {
         this.state.blue.record = fighterStore.snapshot(this.state.blue.id) ?? undefined
       }
+      crowdStore.settle({
+        matchId: this.state.id,
+        winner: this.state.winner,
+      })
     }
     this.lastFinished = this.snapshotFromState(this.state, false)
+  }
+
+  /** Open the crowd book once both named corners are filled. */
+  syncCrowdBook() {
+    if (this.state.phase !== 'lobby') return
+    if (!this.state.red.connected || !this.state.blue.connected) return
+    crowdStore.openBook({
+      matchId: this.state.id,
+      redName: this.state.red.name,
+      blueName: this.state.blue.name,
+      redRecord: this.state.red.record ?? fighterStore.snapshot(this.state.red.id),
+      blueRecord: this.state.blue.record ?? fighterStore.snapshot(this.state.blue.id),
+    })
+  }
+
+  bumpCardHeat(amount: number) {
+    this.state.cardHeat = clamp(this.state.cardHeat + amount, 0, 100)
+    this.emit()
+    return this.state.cardHeat
   }
 
   private emit() {
@@ -545,6 +569,7 @@ export class MatchEngine {
       corner,
     })
     this.emit()
+    this.syncCrowdBook()
     return fighter
   }
 
@@ -591,6 +616,7 @@ export class MatchEngine {
     this.state.blue.ready = false
     this.state.activePhrases = []
     this.state.cardHeat = clamp(this.state.cardHeat + 8, 0, 100)
+    crowdStore.lockBook(this.state.id)
     this.announce(ANNOUNCER.intro, 10)
     this.beginCountdown()
   }

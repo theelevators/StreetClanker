@@ -212,6 +212,69 @@ export interface ChallengeBoard {
   ringLabel: string
 }
 
+/** House chip stack — crowd bankroll for bets + cheap mods. */
+export interface CrowdWallet {
+  id: string
+  name: string
+  chips: number
+  updatedAt: number
+}
+
+export type BetStatus = 'open' | 'won' | 'lost' | 'refunded' | 'void'
+
+/** Moneyline wager on a corner before the bell locks. */
+export interface CrowdBet {
+  id: string
+  matchId: string
+  bettorId: string
+  bettorName: string
+  corner: Corner
+  stake: number
+  /** Decimal payout multiplier locked at placement (e.g. 1.85) */
+  odds: number
+  status: BetStatus
+  payout: number
+  createdAt: number
+  settledAt: number | null
+}
+
+export type CrowdModKind = 'cheer' | 'banner' | 'heat_flare'
+
+export interface CrowdMod {
+  id: string
+  kind: CrowdModKind
+  matchId: string
+  buyerId: string
+  buyerName: string
+  text: string | null
+  cost: number
+  createdAt: number
+}
+
+export type BookStatus = 'closed' | 'open' | 'locked' | 'settled'
+
+/** Live crowd book for the current (or last) bout. */
+export interface CrowdBook {
+  matchId: string
+  status: BookStatus
+  redName: string
+  blueName: string
+  redOdds: number
+  blueOdds: number
+  redPool: number
+  bluePool: number
+  betCount: number
+  winner: Corner | 'draw' | null
+  mods: CrowdMod[]
+}
+
+export interface CrowdLedgerSnapshot {
+  book: CrowdBook
+  wallet: CrowdWallet | null
+  myBets: CrowdBet[]
+  recent: CrowdBet[]
+}
+
 export type ClientMessage =
   | { type: 'hello'; role: 'spectator' | 'coach'; corner?: Corner; name?: string }
   | { type: 'coach_advice'; text: string }

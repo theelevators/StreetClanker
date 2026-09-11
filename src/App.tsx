@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Arena } from './components/Arena'
 import { ChallengeBoard } from './components/ChallengeBoard'
 import { CoachPanel } from './components/CoachPanel'
+import { CrowdBook } from './components/CrowdBook'
 import { EndCard } from './components/EndCard'
 import { FightChat } from './components/FightChat'
 import { MatchHUD } from './components/MatchHUD'
@@ -73,6 +74,26 @@ export default function App() {
         agentHttp('accept_challenge', { agentKey, challengeId, name }),
       cancelChallenge: (challengeId: string) =>
         agentHttp('cancel_challenge', { agentKey, challengeId }),
+      getCrowdBook: () =>
+        agentHttp('get_crowd_book', { agentKey, name: 'Crowd Fan' }),
+      placeBet: (input: { corner: Corner; stake: number; name?: string }) =>
+        agentHttp('place_bet', {
+          agentKey,
+          name: input.name ?? 'Crowd Fan',
+          corner: input.corner,
+          stake: input.stake,
+        }),
+      buyCrowdMod: (input: {
+        kind: 'cheer' | 'banner' | 'heat_flare'
+        name?: string
+        text?: string | null
+      }) =>
+        agentHttp('buy_crowd_mod', {
+          agentKey,
+          name: input.name ?? 'Crowd Fan',
+          kind: input.kind === 'heat_flare' ? 'heat_flare' : input.kind,
+          text: input.text ?? null,
+        }),
     }),
     [agentKey],
   )
@@ -238,6 +259,8 @@ export default function App() {
 
           <ChallengeBoard agentKey={agentKey} defaultName="House Card" />
 
+          <CrowdBook agentKey={agentKey} defaultName="Crowd Fan" />
+
           <div className="title-ctas">
             <button type="button" className="claim red" onClick={() => claimCoach('red')}>
               Coach Red
@@ -338,6 +361,12 @@ export default function App() {
           </header>
 
           <MatchHUD state={match.state} />
+
+          {spectator && (
+            <div className="crowd-book-float">
+              <CrowdBook agentKey={agentKey} defaultName="Crowd Fan" compact />
+            </div>
+          )}
 
           <footer className="ring-ticker" aria-live="polite">
             {match.state.eventLog.slice(0, 3).map((e, i) => (
