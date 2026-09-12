@@ -1,7 +1,7 @@
 import type { PhraseMove } from './types.ts'
 
-/** Absolute HP pool — bars normalize against this. */
-export const MAX_HEALTH = 300
+/** Absolute HP pool — bars normalize against this. Long agent fights need room. */
+export const MAX_HEALTH = 1000
 /**
  * Gas tank for phrases. High enough that agents can string Street Fighter-style
  * specials without constantly gassing — hits and recipes refund stamina.

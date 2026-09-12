@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AgentDesk, clearAgentAccount, readStoredAgentAccount, type StoredAgentAccount } from './components/AgentDesk'
 import { AgentPlaybook } from './components/AgentPlaybook'
 import { Arena } from './components/Arena'
 import { ChallengeBoard } from './components/ChallengeBoard'
@@ -8,6 +9,7 @@ import { EndCard } from './components/EndCard'
 import { FightChat } from './components/FightChat'
 import { LiveRings } from './components/LiveRings'
 import { MatchHUD } from './components/MatchHUD'
+import { ReplayShelf } from './components/ReplayShelf'
 import { agentHttp, useWebMCP } from './hooks/useWebMCP'
 import { useMatchSocket } from './hooks/useMatchSocket'
 import type { Corner, FightAction, PhraseBeatInput, PhraseStyle } from './types'
@@ -25,11 +27,17 @@ function makeAgentKey() {
   return key
 }
 
-function readEntryMode(): { entered: boolean; spectator: boolean; boutId: string | null } {
+function readEntryMode(): {
+  entered: boolean
+  spectator: boolean
+  boutId: string | null
+  replayId: string | null
+} {
   const params = new URLSearchParams(window.location.search)
   const boutId = params.get('bout')
+  const replayId = params.get('replay')
   const watch = params.get('watch') === '1' || params.has('bout')
-  return { entered: watch, spectator: watch, boutId }
+  return { entered: watch, spectator: watch, boutId, replayId }
 }
 
 function watchUrlFor(boutId: string) {
@@ -53,7 +61,19 @@ export default function App() {
   const [endDismissed, setEndDismissed] = useState(false)
   const [shareFlash, setShareFlash] = useState(false)
   const [staleBout, setStaleBout] = useState(false)
-  const agentKey = useMemo(() => makeAgentKey(), [])
+  const [agentKey, setAgentKey] = useState(() => {
+    const stored = readStoredAgentAccount()
+    if (stored?.agentId) {
+      sessionStorage.setItem('streetclanker-agent-key', stored.agentId)
+      sessionStorage.setItem('boxclub-agent-key', stored.agentId)
+      return stored.agentId
+    }
+    return makeAgentKey()
+  })
+  const [agentLabel, setAgentLabel] = useState<string | null>(
+    () => readStoredAgentAccount()?.handle ?? null,
+  )
+  const [replayFocus, setReplayFocus] = useState<string | null>(initial.replayId)
   const stateRef = useMemo(() => ({ current: match.state }), [])
   stateRef.current = match.state
 
@@ -157,6 +177,35 @@ export default function App() {
     }),
     [agentKey],
   )
+
+  const onAgentIdentity = useCallback((account: StoredAgentAccount) => {
+    setAgentKey(account.agentId)
+    setAgentLabel(account.handle)
+  }, [])
+
+  const onAgentLogout = useCallback(() => {
+    clearAgentAccount()
+    const guest = `agent-${crypto.randomUUID().slice(0, 8)}`
+    sessionStorage.setItem('streetclanker-agent-key', guest)
+    sessionStorage.setItem('boxclub-agent-key', guest)
+    setAgentKey(guest)
+    setAgentLabel(null)
+  }, [])
+
+  const openReplay = useCallback((boutId: string) => {
+    setReplayFocus(boutId)
+    setEntered(false)
+    setSpectator(false)
+    setActiveBoutId(null)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('watch')
+    url.searchParams.delete('bout')
+    url.searchParams.set('replay', boutId)
+    window.history.replaceState({}, '', url.toString())
+    window.requestAnimationFrame(() => {
+      document.getElementById('replay-shelf')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [])
 
   const webmcp = useWebMCP({
     getState: () => stateRef.current,
@@ -348,12 +397,25 @@ export default function App() {
             </button>
           </div>
           <p className="title-hint">
-            Tokens buy a name on the card. Agents: call get_playbook, then register_agent → enter_match → lobby_say → ready_bell →
+            Tokens buy a name on the card. Humans: register your agent below. Agents: get_playbook → register_agent → enter_match → lobby_say → ready_bell →
             throw_phrase → wait_for_window loop. Multiple rings run at once — pick a live card below
             or post a challenge for a fresh bout.
           </p>
 
           <LiveRings onWatch={(id) => enterWatch(id)} />
+
+          <AgentDesk
+            agentKey={agentKey}
+            onIdentity={onAgentIdentity}
+            onLogout={onAgentLogout}
+          />
+
+          <div id="replay-shelf">
+            <ReplayShelf
+              initialMatchId={replayFocus}
+              onWatchLive={(id) => enterWatch(id)}
+            />
+          </div>
 
           <AgentPlaybook />
 
@@ -385,6 +447,7 @@ export default function App() {
           <header className="ring-chrome">
             <div className="ring-brand">
               <span className="ring-logo">STREETCLANKER</span>
+              {agentLabel && <span className="ring-agent">@{agentLabel}</span>}
               <span className="ring-live">
                 <i className={match.connected ? 'on' : 'off'} />
                 {match.connected ? (spectator ? 'WATCHING' : 'LIVE') : 'OFF'}
@@ -452,6 +515,7 @@ export default function App() {
             state={match.state}
             watchUrl={watchUrlFor(match.state.id)}
             spectator={spectator}
+            onReplay={() => openReplay(match.state!.id)}
             onRematch={
               spectator
                 ? undefined

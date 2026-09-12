@@ -447,6 +447,12 @@ export class MatchArena {
     return hist ? { ...hist, live: false } : null
   }
 
+  listHistory(limit = 24) {
+    return [...this.history.values()]
+      .sort((a, b) => b.endedAt - a.endedAt)
+      .slice(0, Math.max(1, Math.min(limit, 60)))
+  }
+
   listLive(): LiveRingSummary[] {
     this.gc()
     return [...this.live.values()]

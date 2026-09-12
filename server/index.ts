@@ -363,6 +363,20 @@ app.post('/api/crowd/mod', (req, res) => {
 })
 
 
+app.get('/api/bouts', (req, res) => {
+  const limit = Number(req.query.limit ?? 24)
+  res.json({ ok: true, bouts: matchTape.listRecent(limit) })
+})
+
+app.get('/api/bout/:id/tape/full', (req, res) => {
+  const tape = matchTape.get(String(req.params.id))
+  if (!tape) {
+    res.status(404).json({ error: 'Tape not found' })
+    return
+  }
+  res.json({ ok: true, tape })
+})
+
 app.get('/api/bout/:id/tape', (req, res) => {
   const tape = matchTape.summary(String(req.params.id), Number(req.query.limit ?? 100))
   if (!tape) {

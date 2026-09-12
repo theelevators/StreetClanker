@@ -161,6 +161,66 @@ export class MatchTapeStore {
     }
   }
 
+  /** Newest finished (and live) tapes for the replay shelf. */
+  listRecent(limit = 24) {
+    const cards: Array<{
+      matchId: string
+      startedAt: number
+      endedAt: number | null
+      redName: string
+      blueName: string
+      winner: BoutResult['winner'] | null
+      method: BoutResult['method'] | null
+      eventCount: number
+      live: boolean
+      replayPath: string
+    }> = []
+
+    for (const tape of this.live.values()) {
+      cards.push({
+        matchId: tape.matchId,
+        startedAt: tape.startedAt,
+        endedAt: tape.endedAt,
+        redName: tape.red?.name ?? 'RED',
+        blueName: tape.blue?.name ?? 'BLUE',
+        winner: tape.result?.winner ?? null,
+        method: tape.result?.method ?? null,
+        eventCount: tape.events.length,
+        live: !tape.endedAt,
+        replayPath: `/api/bout/${tape.matchId}/tape`,
+      })
+    }
+
+    try {
+      mkdirSync(DATA_DIR, { recursive: true })
+      for (const file of readdirSync(DATA_DIR)) {
+        if (!file.endsWith('.json')) continue
+        const id = file.replace(/\.json$/, '')
+        if (this.live.has(id)) continue
+        const tape = this.loadDisk(id)
+        if (!tape) continue
+        cards.push({
+          matchId: tape.matchId,
+          startedAt: tape.startedAt,
+          endedAt: tape.endedAt,
+          redName: tape.red?.name ?? 'RED',
+          blueName: tape.blue?.name ?? 'BLUE',
+          winner: tape.result?.winner ?? null,
+          method: tape.result?.method ?? null,
+          eventCount: tape.events.length,
+          live: false,
+          replayPath: `/api/bout/${tape.matchId}/tape`,
+        })
+      }
+    } catch {
+      /* ignore disk issues */
+    }
+
+    return cards
+      .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt))
+      .slice(0, Math.max(1, Math.min(limit, 60)))
+  }
+
   private persist(tape: MatchTape) {
     try {
       mkdirSync(DATA_DIR, { recursive: true })

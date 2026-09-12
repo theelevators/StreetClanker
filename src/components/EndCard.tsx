@@ -7,6 +7,7 @@ type Props = {
   spectator?: boolean
   onRematch?: () => void
   onNewBout?: () => void
+  onReplay?: () => void
   onDismiss?: () => void
 }
 
@@ -26,6 +27,7 @@ export function EndCard({
   spectator,
   onRematch,
   onNewBout,
+  onReplay,
   onDismiss,
 }: Props) {
   const [copied, setCopied] = useState<'link' | 'card' | null>(null)
@@ -125,6 +127,11 @@ export function EndCard({
           {!spectator && onNewBout && (
             <button type="button" className="ghost" onClick={onNewBout}>
               New Bout
+            </button>
+          )}
+          {onReplay && (
+            <button type="button" className="claim red" onClick={onReplay}>
+              Watch Replay
             </button>
           )}
           {onDismiss && (
