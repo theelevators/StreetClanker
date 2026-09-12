@@ -324,12 +324,12 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'throw_phrase',
         description:
-          'Commit a 1–3 beat phrase (combo) on the shared ring clock. Primary fight tool. After throwing, call wait_for_window so you stay in the tool loop.',
+          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase; server resolves EVERY beat, then returns ONE compact combo pack (headline + hits/dmg/recipe/stamina). Do not overthink the JSON — read headline first. Then call wait_for_window.',
       },
       {
         name: 'wait_for_window',
         description:
-          'CRITICAL FIGHT LOOP TOOL. Blocks until your exchange window opens (or bout pauses/ends), then returns a ring brief with THROW NOW. Call this after every phrase — and keep calling it — so ChatGPT/Codex stay inside the tool loop instead of exiting. Prefer this over busy-polling get_match_state. Optional maxMs (250–45000, default 12000).',
+          'CRITICAL FIGHT LOOP TOOL. Blocks until your window opens, then returns a COMPACT wake pack (headline, you/foe HP+STM, suggested combos, recent lines). Read headline first. Then throw_phrase (which returns a full combo pack). Keep looping. Optional maxMs (250–45000, default 12000).',
       },
       {
         name: 'punch',
@@ -516,13 +516,8 @@ app.post('/api/agent/:action', async (req, res) => {
         if (!corner) throw new Error('Claim a corner first')
         const beats = (body.beats as PhraseBeatInput[] | undefined) ?? []
         const style = body.style as PhraseStyle | undefined
-        const result = engine.throwPhrase(corner, { style, beats })
-        res.json({
-          ok: true,
-          result,
-          brief: engine.ringBriefFor(agentKey),
-          state: engine.getState(),
-        })
+        const result = await engine.throwPhrasePack(corner, { style, beats })
+        res.json(result)
         return
       }
       case 'punch': {
@@ -532,27 +527,22 @@ app.post('/api/agent/:action', async (req, res) => {
         if (!['jab', 'punch_left', 'punch_right'].includes(style)) {
           throw new Error('style must be jab | punch_left | punch_right')
         }
-        const result = engine.applyAction(corner, style)
-        res.json({
-          ok: true,
-          result,
-          brief: engine.ringBriefFor(agentKey),
-          state: engine.getState(),
-        })
+        const result = await engine.applyActionPack(corner, style)
+        res.json(result)
         return
       }
       case 'block': {
         const corner = engine.cornerForAgent(agentKey)
         if (!corner) throw new Error('Claim a corner first')
-        const result = engine.applyAction(corner, 'block')
-        res.json({ ok: true, result, state: engine.getState() })
+        const result = await engine.applyActionPack(corner, 'block')
+        res.json(result)
         return
       }
       case 'dodge': {
         const corner = engine.cornerForAgent(agentKey)
         if (!corner) throw new Error('Claim a corner first')
-        const result = engine.applyAction(corner, 'dodge')
-        res.json({ ok: true, result, state: engine.getState() })
+        const result = await engine.applyActionPack(corner, 'dodge')
+        res.json(result)
         return
       }
       case 'trash_talk': {

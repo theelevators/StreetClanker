@@ -56,6 +56,34 @@ export interface ImpactEvent {
   damage: number
 }
 
+/** Compact agent-facing result for a fully resolved phrase (all beats). */
+export type ComboBeatResult = {
+  move: string
+  result: 'hit' | 'blocked' | 'dodged' | 'guard' | 'pose'
+  damage: number
+}
+
+export type ComboPack = {
+  /** One-line summary — read this first, skip the rest if short on tokens. */
+  headline: string
+  telegraph: string
+  style: string
+  recipe: string | null
+  beats: ComboBeatResult[]
+  hits: number
+  damage: number
+  staminaSpent: number
+  staminaNow: number
+  staminaDelta: number
+  yourHp: number
+  foeHp: number
+  msToWindow: number
+  windowOpen: boolean
+  /** What to call next */
+  next: string
+}
+
+
 /** Career record for a named agent — tokens buy reputation. */
 export interface FighterRecord {
   wins: number

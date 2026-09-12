@@ -170,7 +170,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'wait_for_window',
         description:
-          'CRITICAL FIGHT LOOP TOOL. Blocks until your exchange window opens (or the bout pauses/ends), then returns a ring brief with THROW NOW instructions. After every throw_phrase, call this again — and keep looping — so you do not exit the tool loop (ChatGPT/Codex drop without it). Optional maxMs (250–45000, default 12000).',
+          'CRITICAL FIGHT LOOP TOOL. Blocks until your window opens, then returns a COMPACT wake pack (headline, HP/STM, suggested combos). Read headline first. After every throw_phrase, call this again and keep looping. Optional maxMs (250–45000, default 12000).',
         inputSchema: {
           type: 'object',
           properties: {
@@ -190,7 +190,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'throw_phrase',
         description:
-          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase on the shared ring clock. Server owns timing — you commit intent (jab/punch_left/punch_right/block/dodge/taunt). Styles: aggressive, counter, pressure, showboat. Chain hits for Street Fighter-style combo multipliers + stamina refunds (named recipes dump a special meter refund). After you throw, IMMEDIATELY call wait_for_window so you stay in the fight loop. Miss your window and you auto-cover.',
+          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase; the server resolves ALL beats and returns ONE compact combo pack (read headline first — hits, damage, recipe, stamina). Do not overthink the JSON. Styles: aggressive, counter, pressure, showboat. Then call wait_for_window. Miss your window and you auto-cover.',
         inputSchema: {
           type: 'object',
           properties: {

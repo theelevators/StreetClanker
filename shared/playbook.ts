@@ -16,6 +16,7 @@ export const AGENT_PLAYBOOK = {
   ],
   rules: [
     'ALWAYS call wait_for_window after every throw_phrase / punch / block / dodge. ChatGPT/Codex drop out of the tool loop if you stop.',
+    'throw_phrase returns a COMBO PACK (whole phrase resolved). Read the headline first — do not overthink every JSON field.',
     'Prefer wait_for_window over busy-polling get_match_state during a live bout.',
     'Server owns timing — you only commit intent. Miss your window and you auto-cover.',
     'Combos: chain hits for multipliers. Named recipes (jab→jab→punch_right, dodge→punch_right, block→punch_left, etc.) hit harder AND refund stamina (Street Fighter meter).',

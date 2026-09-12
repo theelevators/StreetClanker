@@ -7,6 +7,8 @@ import type {
   Corner,
   FightAction,
   FighterPublic,
+  ComboBeatResult,
+  ComboPack,
   ImpactEvent,
   LobbyStatus,
   MatchState,
@@ -17,6 +19,7 @@ import type {
   ThrowPhraseInput,
 } from '../shared/types.ts'
 import {
+  COMBO_RECIPES,
   COMBO_WINDOW_MS,
   evaluateCombo,
   MAX_HEALTH,
@@ -197,6 +200,13 @@ export class MatchEngine {
   }
   /** Clean attack hits already scored inside the active phrase. */
   private phraseHitCount: Record<string, number> = {}
+  /** Beat outcomes buffered until the phrase fully resolves (combo packs). */
+  private phrasePacks: Record<string, ComboBeatResult[]> = {}
+  /** Resolvers waiting for a phrase's beats to finish. */
+  private phraseWaiters: Array<{
+    phraseId: string
+    resolve: () => void
+  }> = []
   /** Long-poll waiters parked on wait_for_window. */
   private windowWaiters: WindowWaiter[] = []
   /** SSE / push subscribers for agent wakeups. */
@@ -762,6 +772,7 @@ export class MatchEngine {
     this.state.winner = winner
     this.state.roundEndsAt = null
     this.state.activePhrases = []
+    this.flushAllPhraseWaiters()
     this.state.cardHeat = clamp(this.state.cardHeat + 12, 0, 100)
     const text =
       winner === 'draw'
@@ -787,6 +798,7 @@ export class MatchEngine {
     this.state.winner = winner
     this.state.roundEndsAt = null
     this.state.activePhrases = []
+    this.flushAllPhraseWaiters()
     this.announce(ANNOUNCER.ko, 22)
     const text = `KNOCKOUT! ${this.state[winner].name} pops ${this.state[loser].name}'s block!`
     this.pushEvent(text)
@@ -873,6 +885,7 @@ export class MatchEngine {
     }
 
     this.state.activePhrases = [...this.state.activePhrases, phrase]
+    this.phrasePacks[phrase.id] = []
     self.nextWindowAt = phrase.endsAt + PHRASE_RECOVERY_MS
     self.covering = false
     this.coverLatch[corner] = 0
@@ -892,6 +905,14 @@ export class MatchEngine {
   /** Single-action shortcut → 1-beat phrase (legacy tools / coach UI). */
   applyAction(corner: Corner, action: FightAction) {
     return this.throwPhrase(corner, {
+      style: action === 'block' || action === 'dodge' ? 'counter' : 'pressure',
+      beats: [{ move: action }],
+    })
+  }
+
+  /** 1-beat shortcut that still returns a resolved combo pack. */
+  applyActionPack(corner: Corner, action: FightAction) {
+    return this.throwPhrasePack(corner, {
       style: action === 'block' || action === 'dodge' ? 'counter' : 'pressure',
       beats: [{ move: action }],
     })
@@ -924,6 +945,7 @@ export class MatchEngine {
       attacker.lastAction = null
       attacker.lastActionAt = beat.at
       this.extendComboTrail(phrase.corner, 'taunt', beat.at, { countAsHit: false })
+      this.recordPhraseBeat(phrase.id, { move: 'taunt', result: 'pose', damage: 0 })
       this.pushEvent(`${attacker.name} showboats — the strip loves it`)
       this.emit()
       return
@@ -941,6 +963,7 @@ export class MatchEngine {
         })
       }
       this.extendComboTrail(phrase.corner, move, beat.at, { countAsHit: false })
+      this.recordPhraseBeat(phrase.id, { move, result: 'guard', damage: 0 })
       this.pushEvent(
         move === 'block'
           ? `${attacker.name} gloves up`
@@ -950,7 +973,10 @@ export class MatchEngine {
       return
     }
 
-    if (!isAttack(move)) return
+    if (!isAttack(move)) {
+      this.recordPhraseBeat(phrase.id, { move, result: 'pose', damage: 0 })
+      return
+    }
 
     attacker.lastAction = move
     attacker.lastActionAt = beat.at
@@ -1050,11 +1076,16 @@ export class MatchEngine {
       at: beat.at,
       attacker: phrase.corner,
       defender: oppCorner,
-      action: move,
+      action: move as FightAction,
       result,
       damage: result === 'dodged' ? 0 : damage,
     }
     this.state.lastImpact = impact
+    this.recordPhraseBeat(phrase.id, {
+      move,
+      result,
+      damage: impact.damage,
+    })
     this.emit()
 
     if (defender.health <= 0) {
@@ -1159,9 +1190,15 @@ export class MatchEngine {
     }
 
     const beforeLen = this.state.activePhrases.length
-    this.state.activePhrases = this.state.activePhrases.filter(
-      (p) => p.resolved.length < p.beats.length,
-    )
+    const stillActive: ActivePhrase[] = []
+    for (const phrase of this.state.activePhrases) {
+      if (phrase.resolved.length < phrase.beats.length) {
+        stillActive.push(phrase)
+      } else {
+        this.finishPhrasePack(phrase.id)
+      }
+    }
+    this.state.activePhrases = stillActive
     if (this.state.activePhrases.length !== beforeLen) dirty = true
 
     // Missed window → auto-cover (agents only — Vegas survival instinct)
@@ -1445,46 +1482,14 @@ export class MatchEngine {
   }
 
   private agentWakeSnapshot(agentKey: string, reason: AgentWakeReason) {
-    const brief = this.ringBriefFor(agentKey) as Record<string, unknown>
-    const phase = this.state.phase
-    const windowOpen = Boolean(brief.windowOpen)
-    let shouldWake = false
-    let wakeReason: AgentWakeReason = reason
-    let action = 'hold'
-
-    if (phase === 'fighting' && windowOpen) {
-      shouldWake = true
-      wakeReason = 'window_open'
-      action =
-        'THROW NOW — commit throw_phrase immediately, then call wait_for_window again'
-    } else if (phase === 'between_rounds') {
-      shouldWake =
-        reason === 'timeout' || reason === 'corner_break' || reason === 'phase_change'
-      wakeReason = 'corner_break'
-      action =
-        'Corner break — listen_coach / plan the next round, then wait_for_window'
-    } else if (phase === 'ended' || phase === 'knockout' || phase === 'decision') {
-      shouldWake = true
-      wakeReason = 'bout_over'
-      action = 'Bout over — stop the fight loop'
-    } else if (reason === 'timeout') {
-      shouldWake = true
-      action =
-        'Timeout — read brief, then wait_for_window or throw_phrase if windowOpen'
-    }
-
-    const you = brief.you as { stamina?: number } | null
-    const payload = {
-      ok: true,
-      wakeReason,
-      action,
-      loopHint:
-        'Stay in tool loop: wait_for_window → throw_phrase → wait_for_window. Cursor stays hot when tools keep returning; ChatGPT drops if you stop.',
-      brief,
-      stamina: you?.stamina ?? null,
-      windowOpen,
-      phase,
-    }
+    const payload = this.slimWake(agentKey, reason)
+    const wake = payload.wakeReason as AgentWakeReason
+    const shouldWake =
+      reason === 'timeout' ||
+      wake === 'window_open' ||
+      wake === 'bout_over' ||
+      (wake === 'corner_break' &&
+        (reason === 'corner_break' || reason === 'phase_change'))
     return { shouldWake, payload }
   }
 
@@ -1528,6 +1533,216 @@ export class MatchEngine {
       }
     }
     this.windowWaiters = still
+  }
+
+
+  private recordPhraseBeat(
+    phraseId: string,
+    beat: { move: PhraseMove; result: string; damage: number },
+  ) {
+    const pack = this.phrasePacks[phraseId] ?? []
+    const result =
+      beat.result === 'hit' ||
+      beat.result === 'blocked' ||
+      beat.result === 'dodged' ||
+      beat.result === 'guard' ||
+      beat.result === 'pose'
+        ? beat.result
+        : 'pose'
+    pack.push({
+      move: beat.move,
+      result,
+      damage: Math.round(beat.damage),
+    })
+    this.phrasePacks[phraseId] = pack
+  }
+
+
+  private flushAllPhraseWaiters() {
+    const waiting = this.phraseWaiters
+    this.phraseWaiters = []
+    for (const w of waiting) w.resolve()
+  }
+
+  private finishPhrasePack(phraseId: string) {
+    const waiting = this.phraseWaiters.filter((w) => w.phraseId === phraseId)
+    this.phraseWaiters = this.phraseWaiters.filter((w) => w.phraseId !== phraseId)
+    for (const w of waiting) w.resolve()
+  }
+
+  private waitForPhrase(phraseId: string): Promise<void> {
+    const stillGoing = this.state.activePhrases.some(
+      (p) => p.id === phraseId && p.resolved.length < p.beats.length,
+    )
+    if (!stillGoing) return Promise.resolve()
+    return new Promise((resolve) => {
+      this.phraseWaiters.push({ phraseId, resolve })
+    })
+  }
+
+  /**
+   * Commit a phrase and wait until every beat resolves, then return one compact
+   * combo pack. Agents (especially ChatGPT) stay faster when they get the whole
+   * exchange in a single tool result instead of drip-fed single impacts.
+   */
+  async throwPhrasePack(
+    corner: Corner,
+    input: ThrowPhraseInput,
+  ): Promise<{ ok: true; pack: ComboPack; wake?: Record<string, unknown> }> {
+    const beforeStamina = this.state[corner].stamina
+    const committed = this.throwPhrase(corner, input)
+    await this.waitForPhrase(committed.phrase.id)
+    const pack = this.buildComboPack(corner, committed, beforeStamina)
+    // Auto-attach a slim next-window snapshot when the window is already open
+    // so GPT can sometimes skip an extra wait_for_window round-trip.
+    let wake: Record<string, unknown> | undefined
+    if (pack.windowOpen && this.state.phase === 'fighting') {
+      const key = this.agentKeys[corner]
+      if (key) wake = this.slimWake(key, 'window_open')
+    }
+    return { ok: true, pack, wake }
+  }
+
+  private buildComboPack(
+    corner: Corner,
+    committed: { phrase: ActivePhrase; telegraph: string; nextWindowAt: number },
+    beforeStamina: number,
+  ): ComboPack {
+    const you = this.state[corner]
+    const foe = this.state[corner === 'red' ? 'blue' : 'red']
+    const beats = this.phrasePacks[committed.phrase.id] ?? []
+    delete this.phrasePacks[committed.phrase.id]
+    const hits = beats.filter((b) => b.result === 'hit').length
+    const damage = beats.reduce((s, b) => s + b.damage, 0)
+    const recipe = you.comboLabel
+    const t = Date.now()
+    const msToWindow = Math.max(0, (you.nextWindowAt ?? t) - t)
+    const windowOpen = this.isWindowOpen(corner, t)
+    const staminaDelta = Math.round(you.stamina - beforeStamina)
+    const staminaSpent = Math.max(0, Math.round(beforeStamina) - Math.round(you.stamina))
+    const headline = recipe
+      ? `${recipe} — ${hits} hit${hits === 1 ? '' : 's'} · ${Math.round(damage)} dmg · STM ${Math.round(you.stamina)}`
+      : `${committed.telegraph} — ${hits}/${beats.length} connected · ${Math.round(damage)} dmg · STM ${Math.round(you.stamina)}`
+    return {
+      headline,
+      telegraph: committed.telegraph,
+      style: committed.phrase.style,
+      recipe,
+      beats,
+      hits,
+      damage: Math.round(damage),
+      staminaSpent,
+      staminaNow: Math.round(you.stamina),
+      staminaDelta,
+      yourHp: Math.round(you.health),
+      foeHp: Math.round(foe.health),
+      msToWindow,
+      windowOpen,
+      next: windowOpen
+        ? 'Window already open — throw_phrase again OR wait_for_window for a fresh pack.'
+        : 'Call wait_for_window next (it returns a compact wake pack). Keep looping.',
+    }
+  }
+
+  /** Suggested recipes an agent can fire right now given stamina. */
+  private suggestedCombos(stamina: number) {
+    return COMBO_RECIPES.filter((r) => r.pattern.length <= 3)
+      .slice(0, 8)
+      .map((r) => ({
+        name: r.name,
+        style: r.pattern[0] === 'taunt' ? 'showboat' : r.pattern[0] === 'dodge' || r.pattern[0] === 'block' ? 'counter' : 'aggressive',
+        beats: r.pattern.map((move) => ({ move })),
+        mult: r.mult,
+      }))
+      .filter((s) => {
+        // rough cost gate
+        const rough =
+          s.beats.reduce((n, b) => {
+            const table: Record<string, number> = {
+              jab: 4,
+              punch_left: 7,
+              punch_right: 8,
+              block: 3,
+              dodge: 5,
+              taunt: 2,
+            }
+            return n + (table[b.move] ?? 6)
+          }, 0) * 1.1
+        return rough <= stamina + 5
+      })
+      .slice(0, 3)
+  }
+
+  private slimWake(agentKey: string, reason: AgentWakeReason) {
+    const brief = this.ringBriefFor(agentKey) as Record<string, unknown>
+    const you = brief.you as
+      | {
+          name?: string
+          health?: number
+          stamina?: number
+          comboCount?: number
+          comboLabel?: string | null
+        }
+      | null
+    const foe = brief.foe as
+      | { name?: string; health?: number; stamina?: number }
+      | null
+    const phase = this.state.phase
+    const windowOpen = Boolean(brief.windowOpen)
+    let action = 'hold'
+    let wakeReason: AgentWakeReason = reason
+    if (phase === 'fighting' && windowOpen) {
+      wakeReason = 'window_open'
+      action = 'THROW NOW — fire throw_phrase (returns a full combo pack), then wait_for_window'
+    } else if (phase === 'between_rounds') {
+      wakeReason = 'corner_break'
+      action = 'Corner break — listen_coach, then wait_for_window'
+    } else if (phase === 'ended' || phase === 'knockout' || phase === 'decision') {
+      wakeReason = 'bout_over'
+      action = 'Bout over — stop the fight loop'
+    } else if (reason === 'timeout') {
+      action = 'Timeout — skim headline, then wait_for_window or throw_phrase if windowOpen'
+    }
+
+    const suggestions = this.suggestedCombos(you?.stamina ?? 0)
+    const recent = this.state.eventLog.slice(0, 4)
+    const headline =
+      wakeReason === 'window_open'
+        ? `WINDOW OPEN — THROW NOW · STM ${Math.round(you?.stamina ?? 0)} · foe ${Math.round(foe?.health ?? 0)} HP`
+        : wakeReason === 'bout_over'
+          ? 'BOUT OVER'
+          : wakeReason === 'corner_break'
+            ? 'CORNER BREAK — plan next round'
+            : `Waiting (${wakeReason})`
+
+    return {
+      ok: true,
+      headline,
+      wakeReason,
+      action,
+      next: action,
+      you: you
+        ? {
+            name: you.name,
+            hp: Math.round(you.health ?? 0),
+            stm: Math.round(you.stamina ?? 0),
+            combo: you.comboLabel ?? (you.comboCount ? `${you.comboCount} HIT` : null),
+          }
+        : null,
+      foe: foe
+        ? {
+            name: foe.name,
+            hp: Math.round(foe.health ?? 0),
+            stm: Math.round(foe.stamina ?? 0),
+          }
+        : null,
+      foeTelegraph: brief.foeTelegraph ?? null,
+      recent,
+      suggested: suggestions,
+      windowOpen,
+      phase,
+      tip: 'Prefer throw_phrase packs over reading every field. Loop: wait_for_window → throw_phrase → wait_for_window.',
+    }
   }
 
   private isWindowOpen(corner: Corner, t = Date.now()) {
