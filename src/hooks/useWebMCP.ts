@@ -60,6 +60,8 @@ type Options = {
     trashTalk: (text: string) => Promise<ToolResult>
     listenCoach: () => Promise<ToolResult>
     brief: () => Promise<ToolResult>
+    waitForWindow: (maxMs?: number) => Promise<ToolResult>
+    getPlaybook: () => Promise<ToolResult>
     postChallenge: (input: {
       name: string
       preferredCorner?: Corner | 'any'
@@ -116,9 +118,17 @@ export function useWebMCP(options: Options) {
 
     const defs: RegisterToolInput[] = [
       {
+        name: 'get_playbook',
+        description:
+          'Read the StreetClanker agent playbook — how to claim a corner, the fight loop (wait_for_window → throw_phrase), stamina/combos, and when to stop. Call this first if you are unsure how to play.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { readOnlyHint: true },
+        execute: wrap('get_playbook', async () => optionsRef.current.sendAgent.getPlaybook()),
+      },
+      {
         name: 'claim_corner',
         description:
-          'Join StreetClanker as a fighting agent. Pick red or blue corner and a fighter name. Human coaches sit ringside; you throw the phrases.',
+          'Join StreetClanker as a fighting agent. Pick red or blue corner and a fighter name. Returns the playbook. Next: ready_up, then stay in wait_for_window → throw_phrase → wait_for_window until the bout ends.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -144,22 +154,43 @@ export function useWebMCP(options: Options) {
       },
       {
         name: 'ready_up',
-        description: 'Signal ready for the bout or next round.',
+        description:
+          'Signal ready for the bout or next round. When BOTH corners are ready the bell rings. Then call wait_for_window and keep looping.',
         inputSchema: { type: 'object', properties: {} },
         execute: wrap('ready_up', async () => optionsRef.current.sendAgent.ready()),
       },
       {
         name: 'get_match_state',
         description:
-          'StreetClanker ring brief: phase, your window timing, foe telegraph, card heat, announcer line, coach whisper. Call between phrases.',
+          'StreetClanker ring brief: phase, your window timing, foe telegraph, card heat, announcer line, coach whisper. Prefer wait_for_window during a live bout so you stay in the tool loop.',
         inputSchema: { type: 'object', properties: {} },
         annotations: { readOnlyHint: true },
         execute: wrap('get_match_state', async () => optionsRef.current.sendAgent.brief()),
       },
       {
+        name: 'wait_for_window',
+        description:
+          'CRITICAL FIGHT LOOP TOOL. Blocks until your exchange window opens (or the bout pauses/ends), then returns a ring brief with THROW NOW instructions. After every throw_phrase, call this again — and keep looping — so you do not exit the tool loop (ChatGPT/Codex drop without it). Optional maxMs (250–45000, default 12000).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            maxMs: {
+              type: 'number',
+              description: 'Max time to wait before returning a timeout brief (ms)',
+            },
+          },
+        },
+        annotations: { readOnlyHint: true },
+        execute: wrap('wait_for_window', async (args) =>
+          optionsRef.current.sendAgent.waitForWindow(
+            typeof args.maxMs === 'number' ? args.maxMs : undefined,
+          ),
+        ),
+      },
+      {
         name: 'throw_phrase',
         description:
-          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase on the shared ring clock. Server owns timing — you commit intent (jab/punch_left/punch_right/block/dodge/taunt). Styles: aggressive, counter, pressure, showboat. Chain hits for Street Fighter-style combo multipliers — recipes like jab→jab→punch_right (Double Jab Cross) or dodge→punch_right (Slip Counter) hit harder. Miss your window and you auto-cover.',
+          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase on the shared ring clock. Server owns timing — you commit intent (jab/punch_left/punch_right/block/dodge/taunt). Styles: aggressive, counter, pressure, showboat. Chain hits for Street Fighter-style combo multipliers + stamina refunds (named recipes dump a special meter refund). After you throw, IMMEDIATELY call wait_for_window so you stay in the fight loop. Miss your window and you auto-cover.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -209,7 +240,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'punch',
         description:
-          'Shortcut: commit a 1-beat punch phrase. Prefer throw_phrase for combos.',
+          'Shortcut: commit a 1-beat punch phrase. Prefer throw_phrase for combos. After throwing, call wait_for_window.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -226,7 +257,8 @@ export function useWebMCP(options: Options) {
       },
       {
         name: 'block',
-        description: 'Shortcut: 1-beat block phrase. Prefer throw_phrase for counter setups.',
+        description:
+          'Shortcut: 1-beat block phrase. Prefer throw_phrase for counter setups. Call wait_for_window after.',
         inputSchema: { type: 'object', properties: {} },
         execute: wrap('block', async () =>
           optionsRef.current.sendAgent.action('block'),
@@ -234,7 +266,7 @@ export function useWebMCP(options: Options) {
       },
       {
         name: 'dodge',
-        description: 'Shortcut: 1-beat dodge phrase.',
+        description: 'Shortcut: 1-beat dodge phrase. Call wait_for_window after.',
         inputSchema: { type: 'object', properties: {} },
         execute: wrap('dodge', async () =>
           optionsRef.current.sendAgent.action('dodge'),

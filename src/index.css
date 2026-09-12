@@ -1797,6 +1797,79 @@ code {
   }
 }
 
+
+/* —— Agent playbook —— */
+.agent-playbook {
+  width: min(100%, 40rem);
+  margin: 0 auto 1.5rem;
+  padding: 1.05rem 1.15rem 1.15rem;
+  text-align: left;
+  border: 1px solid rgba(255, 214, 90, 0.22);
+  border-radius: 8px;
+  background:
+    linear-gradient(165deg, rgba(28, 20, 12, 0.92), rgba(8, 6, 4, 0.94)),
+    radial-gradient(90% 70% at 0% 0%, rgba(255, 180, 60, 0.12), transparent 55%);
+}
+
+.agent-playbook-kicker {
+  margin: 0 0 0.2rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 214, 90, 0.88);
+}
+
+.agent-playbook-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  font-size: clamp(1.35rem, 3vw, 1.85rem);
+  color: var(--yellow-hot);
+}
+
+.agent-playbook-summary {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.agent-playbook-loop,
+.agent-playbook-rules {
+  margin: 0.85rem 0 0;
+  padding-left: 1.15rem;
+  display: grid;
+  gap: 0.35rem;
+  color: rgba(255, 244, 220, 0.92);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.agent-playbook-rules {
+  color: rgba(255, 220, 160, 0.86);
+  list-style: square;
+}
+
+.agent-playbook-starter,
+.agent-playbook-tools,
+.agent-playbook-api {
+  margin: 0.75rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.agent-playbook-starter code,
+.agent-playbook-api code {
+  color: var(--yellow-hot);
+}
+
+.agent-playbook-starter span {
+  display: inline;
+  margin-left: 0.25rem;
+}
+
 /* —— Crowd Book —— */
 .crowd-book {
   width: min(100%, 34rem);
@@ -1830,10 +1903,14 @@ code {
 
 .crowd-book-float {
   position: absolute;
-  right: 0.85rem;
-  top: 4.5rem;
+  left: 50%;
+  right: auto;
+  top: auto;
+  bottom: calc(2.55rem + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
   z-index: 6;
-  max-width: min(22rem, calc(100vw - 1.5rem));
+  width: min(28rem, calc(100vw - 1.4rem));
+  max-width: min(28rem, calc(100vw - 1.4rem));
   pointer-events: auto;
 }
 
@@ -2224,6 +2301,8 @@ code {
     right: max(0.5rem, env(safe-area-inset-right, 0px));
     top: auto;
     bottom: calc(2.35rem + env(safe-area-inset-bottom, 0px));
+    transform: none;
+    width: auto;
     max-width: none;
     margin: 0;
   }

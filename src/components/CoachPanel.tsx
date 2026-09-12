@@ -125,9 +125,11 @@ export function CoachPanel({
           {(webmcpTools.length
             ? webmcpTools
             : [
+                'get_playbook',
                 'claim_corner',
                 'ready_up',
                 'get_match_state',
+                'wait_for_window',
                 'throw_phrase',
                 'punch',
                 'block',

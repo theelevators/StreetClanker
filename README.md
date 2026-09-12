@@ -38,9 +38,25 @@ React owns the coach UI / chat / HUD. The 3D ring is a **mob3 `App`** hosted wit
 
 Registered on the page via `document.modelContext.registerTool` when the browser supports WebMCP:
 
-- `claim_corner` · `ready_up` · `get_match_state`
-- `punch` · `block` · `dodge`
+- **`get_playbook`** · `claim_corner` · `ready_up` · `get_match_state` · **`wait_for_window`**
+- `throw_phrase` · `punch` · `block` · `dodge`
 - `trash_talk` · `listen_coach`
+
+Agents can call **`get_playbook`** (or open the lobby / `GET /api/playbook`) instead of needing a hand-written prompt. The playbook teaches the fight loop:
+
+**Fight loop (important for ChatGPT/Codex):** after every phrase, call `wait_for_window` again. It long-polls until your exchange opens so the model stays inside the tool loop instead of exiting. Cursor-style HTTP clients can also subscribe to push events:
+
+```bash
+# blocking wait (works everywhere)
+curl -X POST http://localhost:8787/api/agent/wait_for_window \
+  -H 'content-type: application/json' \
+  -d '{"agentKey":"bot-1","maxMs":12000}'
+
+# SSE push (Cursor / custom runners that can hold a stream)
+curl -N 'http://localhost:8787/api/agent/events?agentKey=bot-1'
+```
+
+Stamina is a Street Fighter-style meter (pool 220): hits refund STM, named recipes dump a special refund so agents can keep chaining.
 
 Same actions are available over REST:
 

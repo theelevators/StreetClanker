@@ -21,6 +21,10 @@ import {
   evaluateCombo,
   MAX_HEALTH,
   MAX_STAMINA,
+  STAMINA_BETWEEN_ROUNDS,
+  STAMINA_ON_CHAIN,
+  STAMINA_ON_HIT,
+  STAMINA_ON_RECIPE,
 } from '../shared/combat.ts'
 import { fighterStore, formatRecord } from './fighterStore.ts'
 import { crowdStore } from './crowdStore.ts'
@@ -38,12 +42,12 @@ const TELEGRAPH_MS = 200
 const PHRASE_RECOVERY_MS = 420
 
 const MOVE_COST: Record<PhraseMove, number> = {
-  jab: 6,
-  punch_left: 10,
-  punch_right: 12,
-  block: 4,
-  dodge: 8,
-  taunt: 3,
+  jab: 4,
+  punch_left: 7,
+  punch_right: 8,
+  block: 3,
+  dodge: 5,
+  taunt: 2,
 }
 
 const MOVE_DAMAGE: Partial<Record<PhraseMove, number>> = {
@@ -146,6 +150,32 @@ function isDefense(move: PhraseMove): move is 'block' | 'dodge' {
   return move === 'block' || move === 'dodge'
 }
 
+
+export type AgentWakeReason =
+  | 'window_open'
+  | 'corner_break'
+  | 'bout_over'
+  | 'phase_change'
+  | 'timeout'
+  | 'impact'
+
+export type AgentRingEvent = {
+  type: 'window_open' | 'phase' | 'impact' | 'brief' | 'coach' | 'heartbeat'
+  agentKey?: string
+  corner?: Corner
+  at: number
+  reason?: AgentWakeReason
+  brief?: Record<string, unknown>
+  payload?: Record<string, unknown>
+}
+
+type WindowWaiter = {
+  agentKey: string
+  resolve: (value: Record<string, unknown>) => void
+  timer: ReturnType<typeof setTimeout>
+  want: 'window' | 'any'
+}
+
 export class MatchEngine {
   state: MatchState
   coachAdvice: Record<Corner, CoachAdvice[]> = { red: [], blue: [] }
@@ -167,6 +197,12 @@ export class MatchEngine {
   }
   /** Clean attack hits already scored inside the active phrase. */
   private phraseHitCount: Record<string, number> = {}
+  /** Long-poll waiters parked on wait_for_window. */
+  private windowWaiters: WindowWaiter[] = []
+  /** SSE / push subscribers for agent wakeups. */
+  private agentSubs = new Set<(event: AgentRingEvent) => void>()
+  /** Last window-open latch per corner — edge-trigger wakeups. */
+  private windowOpenLatch: Record<Corner, boolean> = { red: false, blue: false }
 
   constructor(
     onChange: (state: MatchState) => void,
@@ -360,6 +396,7 @@ export class MatchEngine {
 
   private emit() {
     this.onChange(this.state)
+    this.flushAgentWakeups()
   }
 
   private pushEvent(text: string) {
@@ -674,8 +711,8 @@ export class MatchEngine {
     const t = Date.now()
     this.state.red.guard = 0
     this.state.blue.guard = 0
-    this.state.red.stamina = Math.min(MAX_STAMINA, this.state.red.stamina + 20)
-    this.state.blue.stamina = Math.min(MAX_STAMINA, this.state.blue.stamina + 20)
+    this.state.red.stamina = Math.min(MAX_STAMINA, this.state.red.stamina + STAMINA_BETWEEN_ROUNDS)
+    this.state.blue.stamina = Math.min(MAX_STAMINA, this.state.blue.stamina + STAMINA_BETWEEN_ROUNDS)
     this.state.red.nextWindowAt = t + 250
     this.state.blue.nextWindowAt = t + 250
     this.state.activePhrases = []
@@ -987,6 +1024,19 @@ export class MatchEngine {
           `${attacker.name} lands a ${move.replace('_', ' ')} for ${Math.round(damage)}`,
         )
       }
+      // Street Fighter-style meter: hits refill the tank, recipes dump a special refund.
+      {
+        let gain = STAMINA_ON_HIT
+        if (comboEval.count > 1) gain += STAMINA_ON_CHAIN * Math.min(comboEval.count - 1, 5)
+        if (comboEval.recipeJustHit) gain += STAMINA_ON_RECIPE
+        const before = attacker.stamina
+        attacker.stamina = Math.min(MAX_STAMINA, attacker.stamina + gain)
+        if (comboEval.recipeJustHit) {
+          this.pushEvent(
+            `${attacker.name} meters up +${Math.round(attacker.stamina - before)} STM — special refund`,
+          )
+        }
+      }
       this.state.cardHeat = clamp(this.state.cardHeat + 3 + Math.min(comboEval.count, 4), 0, 100)
     }
 
@@ -1091,7 +1141,7 @@ export class MatchEngine {
       const f = this.state[c]
       if (!this.hasActivePhrase(c) && !f.covering) {
         const before = f.stamina
-        f.stamina = Math.min(MAX_STAMINA, f.stamina + 0.12)
+        f.stamina = Math.min(MAX_STAMINA, f.stamina + 0.32)
         if (f.stamina !== before) dirty = true
       }
     }
@@ -1164,7 +1214,7 @@ export class MatchEngine {
 
       let input: ThrowPhraseInput
       const roll = Math.random()
-      if (fighter.stamina < 18) {
+      if (fighter.stamina < 28) {
         input = { style: 'counter', beats: [{ move: 'block' }] }
       } else if (incoming && !isLead) {
         input =
@@ -1292,7 +1342,7 @@ export class MatchEngine {
       coachWhisper = `Window opens in ~${msToWindow}ms. Load the next phrase.`
     } else if (foePhrase) {
       coachWhisper = `Foe telegraph: ${foePhrase.beats.map((b) => b.move).join('→')}. Counter or cover.`
-    } else if ((you?.stamina ?? 0) < 25) {
+    } else if ((you?.stamina ?? 0) < 50) {
       coachWhisper = 'Gas tank low — jab phrases only, or block and breathe.'
     } else if ((you?.comboCount ?? 0) >= 2) {
       coachWhisper = `Chain live (${you!.comboCount}${you!.comboLabel ? ` · ${you!.comboLabel}` : ''}) — finish the string, don’t drop it.`
@@ -1334,8 +1384,158 @@ export class MatchEngine {
         : null,
       lastImpact: state.lastImpact,
       coachWhisper,
-      tip: 'throw_phrase with 1–3 beats. Chain hits for combo multipliers — jab→jab→punch_right, dodge→punch_right, block→punch_left. Server owns timing.',
+      tip: 'FIGHT LOOP: wait_for_window → throw_phrase → wait_for_window. Keep looping — do not stop after one phrase. Combos refund stamina (recipes dump a special meter refund). Call get_playbook for the full agent playbook.',
+      playbookHint: 'get_playbook',
       lobby: this.lobbyStatus(),
     }
   }
+
+  /** Subscribe to agent wakeups (SSE). Returns unsubscribe. */
+  subscribeAgentEvents(listener: (event: AgentRingEvent) => void) {
+    this.agentSubs.add(listener)
+    return () => {
+      this.agentSubs.delete(listener)
+    }
+  }
+
+  private publishAgentEvent(event: AgentRingEvent) {
+    for (const listener of this.agentSubs) {
+      try {
+        listener(event)
+      } catch {
+        /* ignore broken subscriber */
+      }
+    }
+  }
+
+  /**
+   * Block until this agent's exchange window opens (or bout pauses/ends).
+   * Keeps ChatGPT/Codex-style clients inside the tool loop instead of exiting
+   * after a single throw_phrase.
+   */
+  waitForWindow(
+    agentKey: string,
+    opts: { maxMs?: number } = {},
+  ): Promise<Record<string, unknown>> {
+    const corner = this.cornerForAgent(agentKey)
+    if (!corner) {
+      return Promise.reject(new Error('Claim a corner first'))
+    }
+    const maxMs = Math.min(Math.max(opts.maxMs ?? 12_000, 250), 45_000)
+    const snap = this.agentWakeSnapshot(agentKey, 'window_open')
+    if (snap.shouldWake) {
+      return Promise.resolve(snap.payload)
+    }
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.windowWaiters = this.windowWaiters.filter((w) => w.timer !== timer)
+        resolve(this.agentWakeSnapshot(agentKey, 'timeout').payload)
+      }, maxMs)
+      this.windowWaiters.push({
+        agentKey,
+        resolve: (value) => {
+          clearTimeout(timer)
+          resolve(value)
+        },
+        timer,
+        want: 'window',
+      })
+    })
+  }
+
+  private agentWakeSnapshot(agentKey: string, reason: AgentWakeReason) {
+    const brief = this.ringBriefFor(agentKey) as Record<string, unknown>
+    const phase = this.state.phase
+    const windowOpen = Boolean(brief.windowOpen)
+    let shouldWake = false
+    let wakeReason: AgentWakeReason = reason
+    let action = 'hold'
+
+    if (phase === 'fighting' && windowOpen) {
+      shouldWake = true
+      wakeReason = 'window_open'
+      action =
+        'THROW NOW — commit throw_phrase immediately, then call wait_for_window again'
+    } else if (phase === 'between_rounds') {
+      shouldWake =
+        reason === 'timeout' || reason === 'corner_break' || reason === 'phase_change'
+      wakeReason = 'corner_break'
+      action =
+        'Corner break — listen_coach / plan the next round, then wait_for_window'
+    } else if (phase === 'ended' || phase === 'knockout' || phase === 'decision') {
+      shouldWake = true
+      wakeReason = 'bout_over'
+      action = 'Bout over — stop the fight loop'
+    } else if (reason === 'timeout') {
+      shouldWake = true
+      action =
+        'Timeout — read brief, then wait_for_window or throw_phrase if windowOpen'
+    }
+
+    const you = brief.you as { stamina?: number } | null
+    const payload = {
+      ok: true,
+      wakeReason,
+      action,
+      loopHint:
+        'Stay in tool loop: wait_for_window → throw_phrase → wait_for_window. Cursor stays hot when tools keep returning; ChatGPT drops if you stop.',
+      brief,
+      stamina: you?.stamina ?? null,
+      windowOpen,
+      phase,
+    }
+    return { shouldWake, payload }
+  }
+
+  private flushAgentWakeups() {
+    const t = Date.now()
+    for (const corner of ['red', 'blue'] as Corner[]) {
+      const agentKey = this.agentKeys[corner]
+      const open = this.isWindowOpen(corner, t)
+      const wasOpen = this.windowOpenLatch[corner]
+      this.windowOpenLatch[corner] = open
+      if (!agentKey) continue
+
+      if (open && !wasOpen && this.state.phase === 'fighting') {
+        const brief = this.ringBriefFor(agentKey) as Record<string, unknown>
+        this.publishAgentEvent({
+          type: 'window_open',
+          agentKey,
+          corner,
+          at: t,
+          reason: 'window_open',
+          brief,
+        })
+      }
+    }
+
+    if (this.windowWaiters.length === 0) return
+    const still: WindowWaiter[] = []
+    for (const waiter of this.windowWaiters) {
+      const snap = this.agentWakeSnapshot(waiter.agentKey, 'window_open')
+      const phase = this.state.phase
+      const wake =
+        snap.shouldWake ||
+        phase === 'ended' ||
+        phase === 'knockout' ||
+        phase === 'decision'
+      if (wake) {
+        clearTimeout(waiter.timer)
+        waiter.resolve(snap.payload)
+      } else {
+        still.push(waiter)
+      }
+    }
+    this.windowWaiters = still
+  }
+
+  private isWindowOpen(corner: Corner, t = Date.now()) {
+    const you = this.state[corner]
+    if (!you || you.covering || you.knockedOut) return false
+    if (this.hasActivePhrase(corner)) return false
+    if (this.state.phase !== 'fighting') return false
+    return !you.nextWindowAt || t + WINDOW_GRACE_MS >= you.nextWindowAt
+  }
+
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AgentPlaybook } from './components/AgentPlaybook'
 import { Arena } from './components/Arena'
 import { ChallengeBoard } from './components/ChallengeBoard'
 import { CoachPanel } from './components/CoachPanel'
@@ -69,6 +70,12 @@ export default function App() {
       trashTalk: (text: string) => agentHttp('trash_talk', { agentKey, text }),
       listenCoach: () => agentHttp('listen_coach', { agentKey }),
       brief: () => agentHttp('get_match_state', { agentKey }),
+      waitForWindow: (maxMs?: number) =>
+        agentHttp('wait_for_window', {
+          agentKey,
+          ...(typeof maxMs === 'number' ? { maxMs } : {}),
+        }),
+      getPlaybook: () => agentHttp('get_playbook', { agentKey }),
       postChallenge: (input: {
         name: string
         preferredCorner?: Corner | 'any'
@@ -287,8 +294,11 @@ export default function App() {
             </button>
           </div>
           <p className="title-hint">
-            Tokens buy a name on the card. claim_corner → ready_up → defend the record.
+            Tokens buy a name on the card. Agents: call get_playbook, then claim_corner → ready_up →
+            wait_for_window → throw_phrase loop.
           </p>
+
+          <AgentPlaybook />
 
           <ChallengeBoard agentKey={agentKey} defaultName="House Card" />
 

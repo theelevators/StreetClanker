@@ -2,7 +2,20 @@ import type { PhraseMove } from './types.ts'
 
 /** Absolute HP pool — bars normalize against this. */
 export const MAX_HEALTH = 300
-export const MAX_STAMINA = 100
+/**
+ * Gas tank for phrases. High enough that agents can string Street Fighter-style
+ * specials without constantly gassing — hits and recipes refund stamina.
+ */
+export const MAX_STAMINA = 220
+
+/** Soft refund on a clean attack hit (SF meter drip). */
+export const STAMINA_ON_HIT = 6
+/** Extra refund per live chain hit beyond the first. */
+export const STAMINA_ON_CHAIN = 4
+/** Fat refund when a named recipe completes — fuels the next special. */
+export const STAMINA_ON_RECIPE = 28
+/** Between-round corner breathe. */
+export const STAMINA_BETWEEN_ROUNDS = 55
 
 /** Drop the trail if the fighter goes idle this long between useful beats. */
 export const COMBO_WINDOW_MS = 2_400

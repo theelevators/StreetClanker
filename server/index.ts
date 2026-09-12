@@ -16,6 +16,7 @@ import { challengeStore } from './challengeStore.ts'
 import { crowdStore } from './crowdStore.ts'
 import { MatchEngine } from './match.ts'
 import { fighterStore } from './fighterStore.ts'
+import { AGENT_PLAYBOOK } from '../shared/playbook.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT ?? 8787)
@@ -297,38 +298,50 @@ app.post('/api/crowd/mod', (req, res) => {
 app.get('/api/tools', (_req, res) => {
   res.json({
     protocol: 'WebMCP',
-    note: 'These tools are also registered via document.modelContext on the live page.',
+    note: 'These tools are also registered via document.modelContext on the live page. Call get_playbook first if you are a fighting agent.',
+    playbook: AGENT_PLAYBOOK,
     tools: [
       {
+        name: 'get_playbook',
+        description:
+          'Read the StreetClanker agent playbook — how to claim a corner, the fight loop (wait_for_window → throw_phrase), stamina/combos, and when to stop. Call this before fighting if unsure.',
+      },
+      {
         name: 'claim_corner',
-        description: 'Join StreetClanker as an agent in the red or blue corner.',
+        description:
+          'Join StreetClanker as an agent in the red or blue corner. Returns the playbook. Next: ready_up, then wait_for_window → throw_phrase loop.',
       },
       {
         name: 'ready_up',
         description:
-          'Signal ready in the lobby. When BOTH corners are claimed and ready, the bell rings automatically.',
+          'Signal ready in the lobby. When BOTH corners are claimed and ready, the bell rings automatically. Then enter the wait_for_window → throw_phrase loop.',
       },
       {
         name: 'get_match_state',
         description:
-          'Ring brief: phase, window timing, foe telegraph, card heat, lobby board, coach whisper.',
+          'Ring brief: phase, window timing, foe telegraph, card heat, lobby board, coach whisper. Prefer wait_for_window during a live bout.',
       },
       {
         name: 'throw_phrase',
         description:
-          'Commit a 1–3 beat phrase (combo) on the shared ring clock. Primary fight tool.',
+          'Commit a 1–3 beat phrase (combo) on the shared ring clock. Primary fight tool. After throwing, call wait_for_window so you stay in the tool loop.',
+      },
+      {
+        name: 'wait_for_window',
+        description:
+          'CRITICAL FIGHT LOOP TOOL. Blocks until your exchange window opens (or bout pauses/ends), then returns a ring brief with THROW NOW. Call this after every phrase — and keep calling it — so ChatGPT/Codex stay inside the tool loop instead of exiting. Prefer this over busy-polling get_match_state. Optional maxMs (250–45000, default 12000).',
       },
       {
         name: 'punch',
-        description: 'Shortcut: 1-beat punch phrase (jab | punch_left | punch_right).',
+        description: 'Shortcut: 1-beat punch phrase (jab | punch_left | punch_right). Call wait_for_window after.',
       },
       {
         name: 'block',
-        description: 'Shortcut: 1-beat block phrase.',
+        description: 'Shortcut: 1-beat block phrase. Call wait_for_window after.',
       },
       {
         name: 'dodge',
-        description: 'Shortcut: 1-beat dodge phrase.',
+        description: 'Shortcut: 1-beat dodge phrase. Call wait_for_window after.',
       },
       {
         name: 'trash_talk',
@@ -369,10 +382,14 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'buy_crowd_mod',
         description:
-          'Spend chips on a cheap crowd mod while watching: cheer (+heat), banner (chat taunt), or heat_flare (+more heat). Not for fighters mid-exchange — crowd toys only.',
+          'Spend chips on a cheap crowd mod while watching: cheer (+heat), banner (chat taunt), or heat_flare (+more heat). Crowd toys only — not for fighters mid-exchange.',
       },
     ],
   })
+})
+
+app.get('/api/playbook', (_req, res) => {
+  res.json({ ok: true, playbook: AGENT_PLAYBOOK })
 })
 
 app.post('/api/demo', (_req, res) => {
@@ -389,12 +406,61 @@ app.post('/api/reset', (_req, res) => {
   res.json({ ok: true, state: engine.getState() })
 })
 
+/**
+ * Server-Sent Events stream for agents that can hold a push channel
+ * (Cursor browser/HTTP clients, custom runners). Emits window_open / phase /
+ * heartbeat so the client can wake without human re-prompts. WebMCP clients
+ * that cannot hold SSE should use wait_for_window instead (long-poll tool).
+ */
+app.get('/api/agent/events', (req, res) => {
+  const agentKey = String(req.query.agentKey ?? req.query.agent_key ?? '')
+  if (!agentKey) {
+    res.status(400).json({ error: 'agentKey query required' })
+    return
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  res.flushHeaders?.()
+
+  const write = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  }
+
+  write('hello', {
+    ok: true,
+    agentKey,
+    corner: engine.cornerForAgent(agentKey),
+    hint: 'On window_open, call throw_phrase then wait_for_window (or just react). Keep the stream open.',
+    brief: engine.ringBriefFor(agentKey),
+  })
+
+  const unsubscribe = engine.subscribeAgentEvents((event) => {
+    if (event.agentKey && event.agentKey !== agentKey) return
+    write(event.type, event)
+  })
+
+  const heartbeat = setInterval(() => {
+    write('heartbeat', {
+      at: Date.now(),
+      brief: engine.ringBriefFor(agentKey),
+    })
+  }, 5000)
+
+  req.on('close', () => {
+    clearInterval(heartbeat)
+    unsubscribe()
+  })
+})
+
 /** HTTP fallback for agents that cannot use in-page WebMCP yet */
-app.post('/api/agent/:action', (req, res) => {
+app.post('/api/agent/:action', async (req, res) => {
   try {
     const action = req.params.action
     const body = req.body as Record<string, unknown>
-    const agentKey = String(body.agentKey ?? '')
+    const agentKey = String(body.agentKey ?? body.agent_key ?? '')
     if (!agentKey) {
       res.status(400).json({ error: 'agentKey required' })
       return
@@ -405,12 +471,29 @@ app.post('/api/agent/:action', (req, res) => {
         const corner = body.corner as Corner
         const name = String(body.name ?? 'Agent')
         const fighter = engine.joinAgent(agentKey, corner, name)
-        res.json({ ok: true, fighter })
+        res.json({
+          ok: true,
+          fighter,
+          next: 'Call ready_up. When both corners are ready the bell rings. Then wait_for_window → throw_phrase → wait_for_window.',
+          playbook: AGENT_PLAYBOOK,
+        })
         return
       }
       case 'ready_up': {
         engine.setReady(agentKey)
-        res.json({ ok: true, state: engine.getState() })
+        res.json({
+          ok: true,
+          state: engine.getState(),
+          next:
+            engine.getState().phase === 'lobby'
+              ? 'Waiting on the other corner to ready_up.'
+              : 'Bell path started — call wait_for_window and stay in the fight loop.',
+          playbook: AGENT_PLAYBOOK,
+        })
+        return
+      }
+      case 'get_playbook': {
+        res.json({ ok: true, playbook: AGENT_PLAYBOOK })
         return
       }
       case 'get_match_state': {
@@ -420,6 +503,12 @@ app.post('/api/agent/:action', (req, res) => {
           state: engine.getState(),
           corner: engine.cornerForAgent(agentKey),
         })
+        return
+      }
+      case 'wait_for_window': {
+        const maxMs = Number(body.maxMs ?? body.timeoutMs ?? 12_000)
+        const result = await engine.waitForWindow(agentKey, { maxMs })
+        res.json(result)
         return
       }
       case 'throw_phrase': {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ActivePhrase, FighterPublic, FightPhase, MatchState } from '../types'
+import { MAX_STAMINA } from '../../shared/combat.ts'
 
 type Props = {
   state: MatchState
@@ -164,7 +165,7 @@ function FighterMeter({
         <span className={`meter-status status-${status.toLowerCase()}`}>{status}</span>
       </div>
       <Bar label="HP" value={fighter.health} max={fighter.maxHealth} tone="health" />
-      <Bar label="STM" value={fighter.stamina} tone="stamina" />
+      <Bar label="STM" value={fighter.stamina} max={MAX_STAMINA} tone="stamina" />
       {fighter.comboCount > 1 && (
         <div className="combo-chip" aria-live="polite">
           <span className="combo-count">{fighter.comboCount} HIT</span>
@@ -249,7 +250,7 @@ function Bar({
         {label}{' '}
         <em className="bar-value">
           {Math.round(value)}
-          {tone === 'health' ? `/${Math.round(max)}` : ''}
+          {`/${Math.round(max)}`}
         </em>
       </span>
       <div className="bar-track">
