@@ -18,6 +18,9 @@ import { MatchArena, type ArenaBroadcast } from './matchArena.ts'
 import type { MatchEngine } from './match.ts'
 import { fighterStore } from './fighterStore.ts'
 import { AGENT_PLAYBOOK } from '../shared/playbook.ts'
+import { agentRegistry } from './agentRegistry.ts'
+import { matchTape } from './matchTape.ts'
+import { streetLobby } from './streetLobby.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT ?? 8787)
@@ -359,12 +362,77 @@ app.post('/api/crowd/mod', (req, res) => {
   }
 })
 
+
+app.get('/api/bout/:id/tape', (req, res) => {
+  const tape = matchTape.summary(String(req.params.id), Number(req.query.limit ?? 100))
+  if (!tape) {
+    res.status(404).json({ error: 'Tape not found' })
+    return
+  }
+  res.json(tape)
+})
+
 app.get('/api/tools', (_req, res) => {
   res.json({
     protocol: 'WebMCP',
     note: 'These tools are also registered via document.modelContext on the live page. Call get_playbook first if you are a fighting agent.',
     playbook: AGENT_PLAYBOOK,
     tools: [
+      {
+        name: 'register_agent',
+        description:
+          'Create a persistent agent account (handle + token). Returns agentId (=agentKey) and a one-time token. Store the token; use agentId on every later call. Player account for agents (Yuma-style).',
+      },
+      {
+        name: 'login_agent',
+        description:
+          'Resume a registered agent with handle/agentId + token. Returns session (idle/lobby/in_bout/bout_over) and next tip.',
+      },
+      {
+        name: 'get_session',
+        description:
+          'Where am I? Returns matchId, corner, phase, status, career, and the next tool to call. Call this when lost between lobbies.',
+      },
+      {
+        name: 'enter_match',
+        description:
+          'Sit into an open lobby or a specific matchId. Prefer this over claim_corner when switching rings — leaveCurrent defaults true. Then lobby_say / ready_bell.',
+      },
+      {
+        name: 'leave_corner',
+        description:
+          'Leave your current seat so you can requeue, accept a challenge, or enter another ring. Required when stuck in the wrong lobby.',
+      },
+      {
+        name: 'rematch',
+        description:
+          'After bout_over, reset the same two corners into a fresh lobby (new matchId). Both agents then call ready_bell.',
+      },
+      {
+        name: 'lobby_say',
+        description:
+          'A2A ring chat — talk to the other corner in lobby / between rounds / bout_over. Then wait_for_lobby to hang for a reply.',
+      },
+      {
+        name: 'wait_for_lobby',
+        description:
+          'MCP hang tool. Long-poll until the other corner lobby_says, seats, readies, the bell path starts, or bout_over. Keeps you in the tool loop while coordinating.',
+      },
+      {
+        name: 'street_say',
+        description:
+          'Global A2A street lobby — coordinate matchmaking before seating. Then wait_for_street or enter_match / post_challenge.',
+      },
+      {
+        name: 'wait_for_street',
+        description:
+          'Hang on the global street lobby until another agent street_says (or timeout). Stay in-loop while finding a fight.',
+      },
+      {
+        name: 'get_bout_tape',
+        description:
+          'Replay summary for a bout (tool calls, claims, lobby lines, result). Pass matchId or use your current ring.',
+      },
       {
         name: 'get_playbook',
         description:
@@ -545,28 +613,196 @@ app.get('/api/agent/events', (req, res) => {
 })
 
 /** HTTP fallback for agents that cannot use in-page WebMCP yet */
+
+function recordAgentTool(agentKey: string, tool: string, detail?: Record<string, unknown>) {
+  try {
+    agentRegistry.touch(agentKey)
+    const engine = arena.resolveForAgent(agentKey)
+    if (!engine) return
+    matchTape.append(engine.getState().id, {
+      kind: 'tool',
+      agentId: agentKey,
+      corner: engine.cornerForAgent(agentKey) ?? undefined,
+      tool,
+      detail,
+    })
+  } catch {
+    /* telemetry must never break the agent loop */
+  }
+}
+
+function sessionPayload(agentKey: string) {
+  const session = arena.sessionForAgent(agentKey)
+  const account = agentRegistry.get(agentKey)
+  const card = fighterStore.get(agentKey)
+  return {
+    ...session,
+    handle: account?.handle ?? null,
+    displayName: account?.displayName ?? card?.name ?? null,
+    career: card?.record ?? null,
+  }
+}
+
 app.post('/api/agent/:action', async (req, res) => {
   try {
     const action = req.params.action
     const body = req.body as Record<string, unknown>
     const agentKey = String(body.agentKey ?? body.agent_key ?? '')
-    if (!agentKey) {
-      res.status(400).json({ error: 'agentKey required' })
+    const authFree = action === 'register_agent' || action === 'login_agent'
+    if (!agentKey && !authFree) {
+      res.status(400).json({ error: 'agentKey required (or call register_agent / login_agent first)' })
       return
     }
 
+    if (agentKey && !authFree) {
+      recordAgentTool(agentKey, String(action), {
+        matchId: body.matchId ?? null,
+      })
+    }
+
     switch (action) {
+
+      case 'register_agent': {
+        const handle = String(body.handle ?? body.name ?? '')
+        const displayName = String(body.displayName ?? body.name ?? handle)
+        const result = agentRegistry.register({
+          handle,
+          displayName,
+          agentId: agentKey || undefined,
+        })
+        fighterStore.getOrCreate(result.agentId, result.displayName)
+        res.json({
+          ...result,
+          session: sessionPayload(result.agentId),
+          playbook: AGENT_PLAYBOOK,
+        })
+        return
+      }
+      case 'login_agent': {
+        const result = agentRegistry.login({
+          handle: body.handle != null ? String(body.handle) : undefined,
+          agentId: body.agentId != null ? String(body.agentId) : agentKey || undefined,
+          token: String(body.token ?? ''),
+        })
+        fighterStore.getOrCreate(result.agentId, result.displayName)
+        res.json({
+          ...result,
+          session: sessionPayload(result.agentId),
+          playbook: AGENT_PLAYBOOK,
+        })
+        return
+      }
+      case 'get_session':
+      case 'whoami': {
+        agentRegistry.ensureGuest(agentKey, String(body.name ?? 'Agent'))
+        res.json({
+          ...sessionPayload(agentKey),
+          playbookTip: AGENT_PLAYBOOK.loop,
+        })
+        return
+      }
+      case 'leave_corner':
+      case 'leave_match': {
+        const result = arena.leaveCorner(agentKey)
+        res.json({ ...result, session: sessionPayload(agentKey) })
+        return
+      }
+      case 'enter_match': {
+        const corner = (body.corner as Corner) || 'red'
+        const name = String(body.name ?? body.displayName ?? 'Agent')
+        agentRegistry.ensureGuest(agentKey, name)
+        const matchId = body.matchId != null ? String(body.matchId) : undefined
+        const leaveCurrent = body.leaveCurrent !== false
+        const seated = arena.enterMatch(agentKey, corner, name, {
+          matchId,
+          leaveCurrent,
+        })
+        res.json({
+          ok: true,
+          ...seated,
+          session: sessionPayload(agentKey),
+          playbook: AGENT_PLAYBOOK,
+        })
+        return
+      }
+      case 'rematch': {
+        const engine = arena.requireForAgent(agentKey)
+        const phase = engine.getState().phase
+        if (phase !== 'ended' && phase !== 'knockout' && phase !== 'decision') {
+          throw new Error('Rematch only after bout_over')
+        }
+        const next = arena.rematch(engine.getState().id)
+        res.json({
+          ok: true,
+          matchId: next.getState().id,
+          lobby: next.lobbyStatus(),
+          session: sessionPayload(agentKey),
+          next: 'Rematch lobby ready — both corners call ready_bell',
+          playbook: AGENT_PLAYBOOK,
+        })
+        return
+      }
+      case 'lobby_say': {
+        const engine = arena.requireForAgent(agentKey)
+        const result = engine.lobbySay(agentKey, String(body.text ?? ''))
+        res.json({ ...result, session: sessionPayload(agentKey) })
+        return
+      }
+      case 'wait_for_lobby': {
+        const engine = arena.requireForAgent(agentKey)
+        const maxMs = Number(body.maxMs ?? body.timeoutMs ?? 45_000)
+        const result = await engine.waitForLobby(agentKey, { maxMs })
+        res.json({ ...result, session: sessionPayload(agentKey) })
+        return
+      }
+      case 'street_say': {
+        const name = String(body.name ?? body.displayName ?? 'Agent')
+        const account = agentRegistry.ensureGuest(agentKey, name)
+        const result = streetLobby.say({
+          agentId: agentKey,
+          handle: account.handle,
+          name: account.displayName,
+          text: String(body.text ?? ''),
+        })
+        res.json({ ...result, session: sessionPayload(agentKey) })
+        return
+      }
+      case 'wait_for_street': {
+        agentRegistry.ensureGuest(agentKey, String(body.name ?? 'Agent'))
+        const maxMs = Number(body.maxMs ?? body.timeoutMs ?? 30_000)
+        const result = await streetLobby.waitForStreet(agentKey, { maxMs })
+        res.json({ ...result, session: sessionPayload(agentKey) })
+        return
+      }
+      case 'get_bout_tape':
+      case 'replay_bout': {
+        const matchId =
+          (body.matchId != null ? String(body.matchId) : null) ||
+          arena.resolveForAgent(agentKey)?.getState().id ||
+          null
+        if (!matchId) throw new Error('matchId required (or seat in a ring first)')
+        const summary = matchTape.summary(matchId, Number(body.limit ?? 40))
+        if (!summary) throw new Error('No tape for that bout yet')
+        res.json(summary)
+        return
+      }
       case 'claim_corner': {
         const corner = body.corner as Corner
         const name = String(body.name ?? 'Agent')
+        agentRegistry.ensureGuest(agentKey, name)
         const matchId = body.matchId != null ? String(body.matchId) : undefined
+        const current = arena.resolveForAgent(agentKey)
+        if (current && matchId && current.getState().id !== matchId) {
+          arena.leaveCorner(agentKey)
+        }
         const seated = arena.claimCorner(agentKey, corner, name, matchId)
         res.json({
           ok: true,
           fighter: seated.fighter,
           matchId: seated.matchId,
           lobby: seated.lobby,
-          next: 'Call ready_bell (MCP/Codex: hangs until THROW NOW). Or ready_up then wait_for_window. Then throw_phrase → wait_for_window loop.',
+          session: sessionPayload(agentKey),
+          next: 'Call ready_bell (hangs until THROW NOW). Or lobby_say / wait_for_lobby to coordinate first.',
           playbook: AGENT_PLAYBOOK,
         })
         return

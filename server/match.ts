@@ -30,6 +30,7 @@ import {
   STAMINA_ON_RECIPE,
 } from '../shared/combat.ts'
 import { fighterStore, formatRecord } from './fighterStore.ts'
+import { matchTape } from './matchTape.ts'
 import { crowdStore } from './crowdStore.ts'
 
 const ROUND_MS = 60_000
@@ -187,7 +188,7 @@ type WindowWaiter = {
   resolve: (value: Record<string, unknown>) => void
   timer: ReturnType<typeof setTimeout>
   /** window = exchange open; bell = lobby/countdown → first throw window */
-  want: 'window' | 'bell' | 'any'
+  want: 'window' | 'bell' | 'lobby' | 'any'
 }
 
 export class MatchEngine {
@@ -396,6 +397,7 @@ export class MatchEngine {
       })
     }
     this.lastFinished = this.snapshotFromState(this.state, false)
+    if (this.lastFinished) matchTape.finish(this.state.id, this.lastFinished)
   }
 
   /** Open the crowd book once both named corners are filled. */
@@ -509,6 +511,7 @@ export class MatchEngine {
 
   /** Keep the same two fighters for another bout — reputation stays on the card. */
   rematch() {
+    const priorMatchId = this.state.id
     const redKey = this.agentKeys.red
     const blueKey = this.agentKeys.blue
     const redName = this.state.red.name
@@ -525,6 +528,8 @@ export class MatchEngine {
     this.resetCombos()
     this.scoredMatchId = null
     this.state = this.createLobby()
+    matchTape.rekey(priorMatchId, this.state.id)
+    matchTape.append(this.state.id, { kind: 'phase', detail: { note: 'rematch' } })
     this.agentKeys = { red: redKey, blue: blueKey }
     this.joinAgent(redKey, 'red', redName)
     this.joinAgent(blueKey, 'blue', blueName)
@@ -686,6 +691,15 @@ export class MatchEngine {
       text: `${fighter.name} steps into the ${corner.toUpperCase()} corner!`,
       corner,
     })
+    matchTape.start(this.state.id)
+    matchTape.setCorner(this.state.id, corner, { id: agentKey, name: fighter.name })
+    matchTape.append(this.state.id, {
+      kind: 'claim',
+      agentId: agentKey,
+      corner,
+      text: `${fighter.name} claimed ${corner}`,
+    })
+    this.flushLobbyWaiters('peer_joined')
     this.emit()
     this.syncCrowdBook()
     return fighter
@@ -699,6 +713,13 @@ export class MatchEngine {
     }
     this.state[corner].ready = true
     this.pushEvent(`${this.state[corner].name} is ready`)
+    matchTape.append(this.state.id, {
+      kind: 'ready',
+      agentId: agentKey,
+      corner,
+      text: `${this.state[corner].name} ready`,
+    })
+    this.flushLobbyWaiters('peer_ready')
     this.emit()
     if (
       this.state.phase === 'lobby' &&
@@ -716,6 +737,47 @@ export class MatchEngine {
     if (this.agentKeys.blue === agentKey) return 'blue'
     return null
   }
+
+
+  /** Vacate a corner so the agent can requeue, rematch elsewhere, or accept a challenge. */
+  leaveAgent(agentKey: string) {
+    const corner = this.cornerForAgent(agentKey)
+    if (!corner) {
+      return { ok: true as const, left: false as const, reason: 'not_seated' as const }
+    }
+    const phase = this.state.phase
+    if (phase === 'countdown' || phase === 'fighting') {
+      throw new Error('Cannot leave mid-exchange — finish the bout or wait for bout_over')
+    }
+    const name = this.state[corner].name
+    delete this.agentKeys[corner]
+    this.state[corner] = blankFighter(corner, corner === 'red' ? 'Red Rocker' : 'Blue Bomber')
+    this.pushEvent(`${name} left the ${corner} corner`)
+    this.pushChat({
+      from: 'system',
+      name: 'Ring Announcer',
+      text: `${name} steps off the ${corner.toUpperCase()} stool.`,
+      corner,
+    })
+    matchTape.append(this.state.id, {
+      kind: 'leave',
+      agentId: agentKey,
+      corner,
+      text: `${name} left`,
+    })
+    matchTape.setCorner(this.state.id, corner, null)
+    this.flushLobbyWaiters('peer_left')
+    this.emit()
+    return {
+      ok: true as const,
+      left: true as const,
+      matchId: this.state.id,
+      corner,
+      phase: this.state.phase,
+      next: 'You are idle. Call enter_match / claim_corner, post_challenge, or wait_for_street.',
+    }
+  }
+
 
   startMatch() {
     if (this.state.phase !== 'lobby') throw new Error('Match already started')
@@ -1393,12 +1455,19 @@ export class MatchEngine {
     if (!corner) throw new Error('Unknown agent')
     const fighter = this.state[corner]
     this.state.cardHeat = clamp(this.state.cardHeat + 3, 0, 100)
-    return this.pushChat({
+    const message = this.pushChat({
       from: 'agent',
       corner,
       name: fighter.name,
       text,
     })
+    matchTape.append(this.state.id, {
+      kind: 'chat',
+      agentId: agentKey,
+      corner,
+      text,
+    })
+    return message
   }
 
   /** Rich ring-side brief for WebMCP — telegraph, window, coach whisper. */
@@ -1511,6 +1580,155 @@ export class MatchEngine {
    * Keeps ChatGPT/Codex-style clients inside the tool loop instead of exiting
    * after a single throw_phrase.
    */
+
+  /**
+   * Ring-local A2A — talk to the other corner without leaving the tool loop.
+   * Works in lobby / between rounds / bout_over so agents can coordinate like players.
+   */
+  lobbySay(agentKey: string, text: string) {
+    const corner = this.cornerForAgent(agentKey)
+    if (!corner) throw new Error('Claim a corner first')
+    const cleaned = text.trim().slice(0, 240)
+    if (!cleaned) throw new Error('text required')
+    const fighter = this.state[corner]
+    const message = this.pushChat({
+      from: 'agent',
+      corner,
+      name: fighter.name,
+      text: cleaned,
+    })
+    matchTape.append(this.state.id, {
+      kind: 'lobby',
+      agentId: agentKey,
+      corner,
+      text: cleaned,
+    })
+    this.flushLobbyWaiters('lobby_message', {
+      from: agentKey,
+      corner,
+      name: fighter.name,
+      text: cleaned,
+      messageId: message.id,
+    })
+    return {
+      ok: true as const,
+      matchId: this.state.id,
+      message,
+      next: 'wait_for_lobby to hang for a reply, or ready_bell / rematch / leave_corner',
+    }
+  }
+
+  /**
+   * Long-poll the ring A2A channel. Wakes on peer lobby message, seat change,
+   * ready, phase change into the bout, or bout_over — so MCP stays in-loop.
+   */
+  waitForLobby(
+    agentKey: string,
+    opts: { maxMs?: number } = {},
+  ): Promise<Record<string, unknown>> {
+    const corner = this.cornerForAgent(agentKey)
+    if (!corner) {
+      return Promise.reject(new Error('Claim a corner first'))
+    }
+    this.touchAgent(corner)
+    const maxMs = Math.min(Math.max(opts.maxMs ?? 45_000, 250), 90_000)
+    const phase = this.state.phase
+    if (phase === 'fighting') {
+      return Promise.resolve({
+        ok: true,
+        wakeReason: 'in_bout',
+        headline: 'Already fighting — use wait_for_window',
+        matchId: this.state.id,
+        phase,
+        next: 'wait_for_window → throw_phrase loop',
+      })
+    }
+    if (phase === 'ended' || phase === 'knockout' || phase === 'decision') {
+      return Promise.resolve({
+        ok: true,
+        wakeReason: 'bout_over',
+        headline: 'BOUT OVER — rematch or leave_corner',
+        matchId: this.state.id,
+        phase,
+        next: 'rematch (same foe) or leave_corner then enter_match / street_say',
+      })
+    }
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.windowWaiters = this.windowWaiters.filter((w) => w.timer !== timer)
+        this.touchAgent(corner)
+        resolve({
+          ok: true,
+          wakeReason: 'timeout',
+          headline: 'LOBBY — no peer ping yet',
+          matchId: this.state.id,
+          phase: this.state.phase,
+          lobby: this.lobbyStatus(),
+          next: 'lobby_say, wait_for_lobby again, or ready_bell',
+        })
+      }, maxMs)
+      this.windowWaiters.push({
+        agentKey,
+        resolve: (value) => {
+          clearTimeout(timer)
+          this.touchAgent(corner)
+          resolve(value)
+        },
+        timer,
+        want: 'lobby',
+      })
+    })
+  }
+
+  private flushLobbyWaiters(
+    reason: string,
+    message?: Record<string, unknown>,
+  ) {
+    if (this.windowWaiters.length === 0) return
+    const still: typeof this.windowWaiters = []
+    for (const waiter of this.windowWaiters) {
+      if (waiter.want !== 'lobby' && waiter.want !== 'any') {
+        still.push(waiter)
+        continue
+      }
+      // Don't wake the speaker on their own lobby_message
+      if (
+        reason === 'lobby_message' &&
+        message?.from &&
+        waiter.agentKey === message.from
+      ) {
+        still.push(waiter)
+        continue
+      }
+      clearTimeout(waiter.timer)
+      const corner = this.cornerForAgent(waiter.agentKey)
+      waiter.resolve({
+        ok: true,
+        wakeReason: reason,
+        headline:
+          reason === 'lobby_message' && message?.text
+            ? `LOBBY · ${message.name}: ${message.text}`
+            : `LOBBY UPDATE — ${reason}`,
+        matchId: this.state.id,
+        phase: this.state.phase,
+        corner,
+        message: message ?? null,
+        lobby: this.lobbyStatus(),
+        next:
+          this.state.phase === 'lobby'
+            ? 'lobby_say / ready_bell / wait_for_lobby'
+            : this.state.phase === 'ended' ||
+                this.state.phase === 'knockout' ||
+                this.state.phase === 'decision'
+              ? 'rematch or leave_corner'
+              : 'ready_bell or wait_for_window',
+      })
+    }
+    this.windowWaiters = still
+  }
+
+
   waitForWindow(
     agentKey: string,
     opts: { maxMs?: number } = {},
@@ -1660,6 +1878,38 @@ export class MatchEngine {
     if (this.windowWaiters.length === 0) return
     const still: WindowWaiter[] = []
     for (const waiter of this.windowWaiters) {
+      if (waiter.want === 'lobby') {
+        // Lobby waiters are flushed via flushLobbyWaiters on chat/seat/ready.
+        // Also release them when the bout actually starts or ends.
+        const phase = this.state.phase
+        if (
+          phase === 'fighting' ||
+          phase === 'countdown' ||
+          phase === 'ended' ||
+          phase === 'knockout' ||
+          phase === 'decision'
+        ) {
+          clearTimeout(waiter.timer)
+          waiter.resolve({
+            ok: true,
+            wakeReason: phase === 'fighting' || phase === 'countdown' ? 'bell_path' : 'bout_over',
+            headline:
+              phase === 'fighting' || phase === 'countdown'
+                ? 'Bell path — use ready_bell / wait_for_window'
+                : 'BOUT OVER — rematch or leave_corner',
+            matchId: this.state.id,
+            phase,
+            lobby: this.lobbyStatus(),
+            next:
+              phase === 'fighting' || phase === 'countdown'
+                ? 'ready_bell or wait_for_window'
+                : 'rematch or leave_corner',
+          })
+        } else {
+          still.push(waiter)
+        }
+        continue
+      }
       const snap =
         waiter.want === 'bell'
           ? this.bellWakeSnapshot(waiter.agentKey, 'bell')

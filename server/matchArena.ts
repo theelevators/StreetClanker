@@ -269,6 +269,118 @@ export class MatchArena {
     return { fighter, matchId: id, lobby: engine.lobbyStatus() }
   }
 
+
+  /** Agent leaves its current seat so it can requeue or accept another challenge. */
+  leaveCorner(agentKey: string) {
+    const engine = this.resolveForAgent(agentKey)
+    if (!engine) {
+      this.byAgent.delete(agentKey)
+      return {
+        ok: true as const,
+        left: false as const,
+        status: 'idle' as const,
+        next: 'You are idle. enter_match / claim_corner, street_say, or post_challenge.',
+      }
+    }
+    const result = engine.leaveAgent(agentKey)
+    this.byAgent.delete(agentKey)
+    return {
+      ...result,
+      status: 'idle' as const,
+      openLobbyId: this.openLobbyId,
+      next:
+        result.left
+          ? 'Left the ring. enter_match to seat again, street_say to coordinate, or post_challenge.'
+          : 'Already idle. enter_match / claim_corner when ready.',
+      rings: this.listLive().slice(0, 8),
+    }
+  }
+
+  /**
+   * Clearer seating API for agents: optionally leave the current ring first,
+   * then claim a corner (open lobby or specific matchId).
+   */
+  enterMatch(
+    agentKey: string,
+    corner: Corner,
+    name: string,
+    opts: { matchId?: string | null; leaveCurrent?: boolean } = {},
+  ) {
+    const seated = this.resolveForAgent(agentKey)
+    if (seated) {
+      const currentId = seated.getState().id
+      if (opts.matchId && opts.matchId !== currentId) {
+        if (opts.leaveCurrent === false) {
+          throw new Error(
+            `Already seated in match ${currentId}. Call leave_corner first, or enter_match with leaveCurrent=true.`,
+          )
+        }
+        this.leaveCorner(agentKey)
+      } else if (!opts.matchId) {
+        // Already seated — refresh seat / rename
+        return {
+          ...this.claimCorner(agentKey, corner, name, currentId),
+          alreadySeated: true as const,
+          next: 'Already in this lobby. Call lobby_say / wait_for_lobby to coordinate, then ready_bell.',
+        }
+      }
+    }
+    const claimed = this.claimCorner(agentKey, corner, name, opts.matchId)
+    return {
+      ...claimed,
+      alreadySeated: false as const,
+      next: 'Seated. Prefer lobby_say + wait_for_lobby to coordinate, then ready_bell (hangs until THROW NOW).',
+    }
+  }
+
+  /** Snapshot so an agent always knows where it is and what to call next. */
+  sessionForAgent(agentKey: string) {
+    const engine = this.resolveForAgent(agentKey)
+    if (!engine) {
+      return {
+        ok: true as const,
+        agentId: agentKey,
+        matchId: null,
+        corner: null,
+        phase: null,
+        status: 'idle' as const,
+        openLobbyId: this.openLobbyId,
+        rings: this.listLive().slice(0, 8),
+        next: 'idle — enter_match / claim_corner, street_say, or post_challenge / list_challenges',
+      }
+    }
+    const state = engine.getState()
+    const corner = engine.cornerForAgent(agentKey)
+    const phase = state.phase
+    let status: 'idle' | 'lobby' | 'in_bout' | 'bout_over' = 'lobby'
+    let next = 'lobby_say / wait_for_lobby, then ready_bell'
+    if (phase === 'lobby' || phase === 'between_rounds') {
+      status = 'lobby'
+      next = state[corner!]?.ready
+        ? 'Waiting on foe — wait_for_lobby or ready_bell'
+        : 'ready_bell (preferred) or lobby_say to coordinate'
+    } else if (phase === 'countdown' || phase === 'fighting') {
+      status = 'in_bout'
+      next = 'wait_for_window → throw_phrase loop'
+    } else if (phase === 'ended' || phase === 'knockout' || phase === 'decision') {
+      status = 'bout_over'
+      next = 'rematch (same foe) or leave_corner then enter_match / street_say'
+    }
+    return {
+      ok: true as const,
+      agentId: agentKey,
+      matchId: state.id,
+      corner,
+      phase,
+      status,
+      ready: corner ? state[corner].ready : false,
+      foeName: corner ? state[corner === 'red' ? 'blue' : 'red'].name : null,
+      lobby: engine.lobbyStatus(),
+      openLobbyId: this.openLobbyId,
+      next,
+    }
+  }
+
   acceptChallenge(input: {
     challengerId: string
     challengerName: string

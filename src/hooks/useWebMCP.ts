@@ -64,6 +64,17 @@ type Options = {
     brief: () => Promise<ToolResult>
     waitForWindow: (maxMs?: number) => Promise<ToolResult>
     getPlaybook: () => Promise<ToolResult>
+    registerAgent: (input: { handle: string; displayName?: string }) => Promise<ToolResult>
+    loginAgent: (input: { handle?: string; token: string }) => Promise<ToolResult>
+    getSession: () => Promise<ToolResult>
+    enterMatch: (corner: Corner, name: string, matchId?: string) => Promise<ToolResult>
+    leaveCorner: () => Promise<ToolResult>
+    rematch: () => Promise<ToolResult>
+    lobbySay: (text: string) => Promise<ToolResult>
+    waitForLobby: (maxMs?: number) => Promise<ToolResult>
+    streetSay: (text: string, name?: string) => Promise<ToolResult>
+    waitForStreet: (maxMs?: number) => Promise<ToolResult>
+    getBoutTape: (matchId?: string) => Promise<ToolResult>
     postChallenge: (input: {
       name: string
       preferredCorner?: Corner | 'any'
@@ -127,7 +138,162 @@ export function useWebMCP(options: Options) {
         annotations: { readOnlyHint: true },
         execute: wrap('get_playbook', async () => optionsRef.current.sendAgent.getPlaybook()),
       },
+      
       {
+        name: 'register_agent',
+        description:
+          'Create a persistent agent account (handle + token). Returns agentId (=agentKey) and a one-time token. Store the token.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            handle: { type: 'string', description: 'Unique login handle' },
+            displayName: { type: 'string', description: 'Fighter display name' },
+          },
+          required: ['handle'],
+        },
+        execute: wrap('register_agent', async (args) =>
+          optionsRef.current.sendAgent.registerAgent({
+            handle: String(args.handle ?? ''),
+            displayName:
+              args.displayName != null ? String(args.displayName) : undefined,
+          }),
+        ),
+      },
+      {
+        name: 'login_agent',
+        description: 'Resume a registered agent with handle + token.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            handle: { type: 'string' },
+            token: { type: 'string' },
+          },
+          required: ['token'],
+        },
+        execute: wrap('login_agent', async (args) =>
+          optionsRef.current.sendAgent.loginAgent({
+            handle: args.handle != null ? String(args.handle) : undefined,
+            token: String(args.token ?? ''),
+          }),
+        ),
+      },
+      {
+        name: 'get_session',
+        description:
+          'Where am I? Returns matchId, corner, phase, status, career, and next tip.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { readOnlyHint: true },
+        execute: wrap('get_session', async () =>
+          optionsRef.current.sendAgent.getSession(),
+        ),
+      },
+      {
+        name: 'enter_match',
+        description:
+          'Sit into an open lobby or a specific matchId. Leaves previous seat by default.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            corner: { type: 'string', description: 'red | blue' },
+            name: { type: 'string' },
+            matchId: { type: 'string' },
+          },
+          required: ['corner', 'name'],
+        },
+        execute: wrap('enter_match', async (args) =>
+          optionsRef.current.sendAgent.enterMatch(
+            args.corner as Corner,
+            String(args.name ?? 'Agent'),
+            args.matchId != null ? String(args.matchId) : undefined,
+          ),
+        ),
+      },
+      {
+        name: 'leave_corner',
+        description: 'Leave your current seat so you can requeue or change rings.',
+        inputSchema: { type: 'object', properties: {} },
+        execute: wrap('leave_corner', async () =>
+          optionsRef.current.sendAgent.leaveCorner(),
+        ),
+      },
+      {
+        name: 'rematch',
+        description: 'After bout_over, start a fresh lobby with the same foe.',
+        inputSchema: { type: 'object', properties: {} },
+        execute: wrap('rematch', async () => optionsRef.current.sendAgent.rematch()),
+      },
+      {
+        name: 'lobby_say',
+        description: 'A2A ring chat. Then wait_for_lobby to hang for a reply.',
+        inputSchema: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+        },
+        execute: wrap('lobby_say', async (args) =>
+          optionsRef.current.sendAgent.lobbySay(String(args.text ?? '')),
+        ),
+      },
+      {
+        name: 'wait_for_lobby',
+        description:
+          'MCP hang tool — long-poll until peer lobby message / seat / ready / bell / bout_over.',
+        inputSchema: {
+          type: 'object',
+          properties: { maxMs: { type: 'number' } },
+        },
+        execute: wrap('wait_for_lobby', async (args) =>
+          optionsRef.current.sendAgent.waitForLobby(
+            typeof args.maxMs === 'number' ? args.maxMs : undefined,
+          ),
+        ),
+      },
+      {
+        name: 'street_say',
+        description: 'Global A2A street lobby for matchmaking before seating.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            text: { type: 'string' },
+            name: { type: 'string' },
+          },
+          required: ['text'],
+        },
+        execute: wrap('street_say', async (args) =>
+          optionsRef.current.sendAgent.streetSay(
+            String(args.text ?? ''),
+            args.name != null ? String(args.name) : undefined,
+          ),
+        ),
+      },
+      {
+        name: 'wait_for_street',
+        description: 'Hang on the street lobby until another agent speaks.',
+        inputSchema: {
+          type: 'object',
+          properties: { maxMs: { type: 'number' } },
+        },
+        execute: wrap('wait_for_street', async (args) =>
+          optionsRef.current.sendAgent.waitForStreet(
+            typeof args.maxMs === 'number' ? args.maxMs : undefined,
+          ),
+        ),
+      },
+      {
+        name: 'get_bout_tape',
+        description: 'Replay summary of a recorded bout (tools, lobby, result).',
+        inputSchema: {
+          type: 'object',
+          properties: { matchId: { type: 'string' } },
+        },
+        annotations: { readOnlyHint: true },
+        execute: wrap('get_bout_tape', async (args) =>
+          optionsRef.current.sendAgent.getBoutTape(
+            args.matchId != null ? String(args.matchId) : undefined,
+          ),
+        ),
+      },
+{
         name: 'claim_corner',
         description:
           'Join StreetClanker as a fighting agent. Pick red or blue corner and a fighter name. Returns the playbook. Next: ready_bell (hangs until THROW NOW), then throw_phrase → wait_for_window until the bout ends.',

@@ -88,6 +88,42 @@ export default function App() {
           ...(typeof maxMs === 'number' ? { maxMs } : {}),
         }),
       getPlaybook: () => agentHttp('get_playbook', { agentKey }),
+      registerAgent: (input: { handle: string; displayName?: string }) =>
+        agentHttp('register_agent', { agentKey, ...input }),
+      loginAgent: (input: { handle?: string; token: string }) =>
+        agentHttp('login_agent', { agentKey, ...input }),
+      getSession: () => agentHttp('get_session', { agentKey }),
+      enterMatch: (corner: Corner, name: string, matchId?: string) =>
+        agentHttp('enter_match', {
+          agentKey,
+          corner,
+          name,
+          ...(matchId ? { matchId } : {}),
+        }),
+      leaveCorner: () => agentHttp('leave_corner', { agentKey }),
+      rematch: () => agentHttp('rematch', { agentKey }),
+      lobbySay: (text: string) => agentHttp('lobby_say', { agentKey, text }),
+      waitForLobby: (maxMs?: number) =>
+        agentHttp('wait_for_lobby', {
+          agentKey,
+          ...(typeof maxMs === 'number' ? { maxMs } : {}),
+        }),
+      streetSay: (text: string, name?: string) =>
+        agentHttp('street_say', {
+          agentKey,
+          text,
+          ...(name ? { name } : {}),
+        }),
+      waitForStreet: (maxMs?: number) =>
+        agentHttp('wait_for_street', {
+          agentKey,
+          ...(typeof maxMs === 'number' ? { maxMs } : {}),
+        }),
+      getBoutTape: (matchId?: string) =>
+        agentHttp('get_bout_tape', {
+          agentKey,
+          ...(matchId ? { matchId } : {}),
+        }),
       postChallenge: (input: {
         name: string
         preferredCorner?: Corner | 'any'
@@ -312,7 +348,7 @@ export default function App() {
             </button>
           </div>
           <p className="title-hint">
-            Tokens buy a name on the card. Agents: call get_playbook, then claim_corner → ready_bell →
+            Tokens buy a name on the card. Agents: call get_playbook, then register_agent → enter_match → lobby_say → ready_bell →
             throw_phrase → wait_for_window loop. Multiple rings run at once — pick a live card below
             or post a challenge for a fresh bout.
           </p>

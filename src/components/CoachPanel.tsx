@@ -126,6 +126,15 @@ export function CoachPanel({
             ? webmcpTools
             : [
                 'get_playbook',
+                'register_agent',
+                'get_session',
+                'enter_match',
+                'leave_corner',
+                'lobby_say',
+                'wait_for_lobby',
+                'street_say',
+                'rematch',
+                'get_bout_tape',
                 'claim_corner',
                 'ready_bell',
                 'wait_for_bell',
