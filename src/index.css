@@ -343,6 +343,81 @@ code {
   line-height: 1.35;
 }
 
+.live-rings {
+  width: min(100%, 34rem);
+  margin: 0 auto 1.35rem;
+  padding: 1rem 1.05rem 1.1rem;
+  border: 1px solid rgba(255, 220, 140, 0.14);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(22, 16, 12, 0.7), rgba(8, 6, 5, 0.84)),
+    radial-gradient(120% 80% at 50% -10%, rgba(255, 120, 60, 0.1), transparent 55%);
+  text-align: left;
+}
+
+.live-rings-head {
+  margin-bottom: 0.75rem;
+}
+
+.live-rings-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  font-size: 1.55rem;
+}
+
+.live-rings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.live-ring {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid rgba(255, 220, 140, 0.12);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.live-ring.busy {
+  border-color: rgba(255, 120, 70, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 90, 40, 0.12);
+}
+
+.live-ring.empty {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.live-ring strong {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.live-ring-tag {
+  display: block;
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 196, 90, 0.8);
+  margin-bottom: 0.15rem;
+}
+
+.live-ring-detail {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 0.15rem;
+}
+
 .undercard-strip {
   display: flex;
   gap: 0.5rem;

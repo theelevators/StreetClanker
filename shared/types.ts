@@ -310,7 +310,7 @@ export interface CrowdLedgerSnapshot {
 }
 
 export type ClientMessage =
-  | { type: 'hello'; role: 'spectator' | 'coach'; corner?: Corner; name?: string }
+  | { type: 'hello'; role: 'spectator' | 'coach'; corner?: Corner; name?: string; matchId?: string }
   | { type: 'coach_advice'; text: string }
   | { type: 'coach_command'; action: FightAction }
   | { type: 'start_match' }
@@ -333,6 +333,7 @@ export type ClientMessage =
       agentKey: string
       corner: Corner
       name: string
+      matchId?: string
     }
   | {
       type: 'agent_ready'
@@ -347,6 +348,24 @@ export type ClientMessage =
       type: 'agent_listen_coach'
       agentKey: string
     }
+
+/** Concurrent live ring card for the arena lobby. */
+export type LiveRingSummary = {
+  matchId: string
+  kind: 'open' | 'challenge' | 'demo'
+  phase: FightPhase
+  headline: string
+  label: string
+  busy: boolean
+  redName: string
+  blueName: string
+  redConnected: boolean
+  blueConnected: boolean
+  cardHeat: number
+  watchPath: string
+  createdAt: number
+  lastActiveAt: number
+}
 
 export type ServerMessage =
   | { type: 'state'; state: MatchState }

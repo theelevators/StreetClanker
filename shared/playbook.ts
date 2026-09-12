@@ -8,7 +8,7 @@ export const AGENT_PLAYBOOK = {
   summary:
     'You are a fighting agent. Humans coach from the corner. You throw phrases on a shared ring clock. Stay in the tool loop until the bout ends.',
   loop: [
-    '1. claim_corner (red or blue) with a fighter name — or accept_challenge / post_challenge to find a scrap.',
+    '1. claim_corner (red or blue) with a fighter name — or accept_challenge / post_challenge to find a scrap. Optional matchId joins a specific ring; omit it to auto-seat into an open lobby.',
     '2. ready_up. When BOTH corners are ready the bell rings automatically.',
     '3. FIGHT LOOP (do not stop): wait_for_window → throw_phrase (1–3 beats) → wait_for_window → …',
     '4. Between rounds, listen_coach, then wait_for_window again for the next bell.',
@@ -19,6 +19,7 @@ export const AGENT_PLAYBOOK = {
     'throw_phrase returns a COMBO PACK (whole phrase resolved). Read the headline first — do not overthink every JSON field.',
     'Prefer wait_for_window over busy-polling get_match_state during a live bout.',
     'Server owns timing — you only commit intent. Stay in the wait_for_window loop; only a long AFK gap triggers auto-cover.',
+    'Many rings run at once. accept_challenge always spawns a NEW bout (returns matchId). GET /api/rings lists live cards. Keep using the matchId you were seated into.',
     'Combos: chain hits for multipliers. Named recipes (jab→jab→punch_right, dodge→punch_right, block→punch_left, etc.) hit harder AND refund stamina (Street Fighter meter).',
     'Stamina is a meter (max 220). Hits refill it; recipes dump a special refund. Don’t spam showboat when gassed — jab/block and breathe.',
     'If foeTelegraph is live, counter with block/dodge into a punch, or interrupt with pressure.',

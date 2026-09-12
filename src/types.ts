@@ -19,6 +19,7 @@ export type {
   FighterRecord,
   ImpactEvent,
   ImpactResult,
+  LiveRingSummary,
   LobbyStatus,
   MatchState,
   OpenChallenge,

@@ -6,6 +6,7 @@ import { CoachPanel } from './components/CoachPanel'
 import { CrowdBook } from './components/CrowdBook'
 import { EndCard } from './components/EndCard'
 import { FightChat } from './components/FightChat'
+import { LiveRings } from './components/LiveRings'
 import { MatchHUD } from './components/MatchHUD'
 import { agentHttp, useWebMCP } from './hooks/useWebMCP'
 import { useMatchSocket } from './hooks/useMatchSocket'
@@ -42,7 +43,8 @@ type Drawer = 'none' | 'coach' | 'mic'
 
 export default function App() {
   const initial = useMemo(() => readEntryMode(), [])
-  const match = useMatchSocket()
+  const [activeBoutId, setActiveBoutId] = useState<string | null>(initial.boutId)
+  const match = useMatchSocket(activeBoutId)
   const [coachCorner, setCoachCorner] = useState<Corner | null>(null)
   const [coachName] = useState('Coach')
   const [entered, setEntered] = useState(initial.entered)
@@ -159,22 +161,28 @@ export default function App() {
       match.joinAsCoach(corner, coachName)
       setEntered(true)
       setDrawer('coach')
-      const url = new URL(window.location.href)
-      url.searchParams.delete('watch')
-      window.history.replaceState({}, '', `${url.pathname}?bout=${match.state?.id ?? ''}`)
+      const id = match.state?.id ?? activeBoutId
+      if (id) {
+        setActiveBoutId(id)
+        window.history.replaceState({}, '', `/?bout=${id}`)
+      }
     },
-    [match, coachName],
+    [match, coachName, activeBoutId],
   )
 
-  const enterWatch = useCallback(() => {
-    setSpectator(true)
-    setEntered(true)
-    setDrawer('none')
-    const id = match.state?.id
-    if (id) {
-      window.history.replaceState({}, '', `/?watch=1&bout=${id}`)
-    }
-  }, [match.state?.id])
+  const enterWatch = useCallback(
+    (boutId?: string | null) => {
+      const id = boutId ?? match.state?.id ?? activeBoutId
+      setSpectator(true)
+      setEntered(true)
+      setDrawer('none')
+      if (id) {
+        setActiveBoutId(id)
+        window.history.replaceState({}, '', `/?watch=1&bout=${id}`)
+      }
+    },
+    [match.state?.id, activeBoutId],
+  )
 
   const enterDemo = useCallback(() => {
     setSpectator(false)
@@ -279,7 +287,7 @@ export default function App() {
             <button
               type="button"
               className="ghost wide"
-              onClick={enterWatch}
+              onClick={() => enterWatch()}
               disabled={!match.connected}
             >
               Watch Live
@@ -295,8 +303,11 @@ export default function App() {
           </div>
           <p className="title-hint">
             Tokens buy a name on the card. Agents: call get_playbook, then claim_corner → ready_up →
-            wait_for_window → throw_phrase loop.
+            wait_for_window → throw_phrase loop. Multiple rings run at once — pick a live card below
+            or post a challenge for a fresh bout.
           </p>
+
+          <LiveRings onWatch={(id) => enterWatch(id)} />
 
           <AgentPlaybook />
 

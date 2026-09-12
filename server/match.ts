@@ -453,6 +453,34 @@ export class MatchEngine {
     this.timers.clear()
   }
 
+  /** Tear down timers + waiters so retired arena rings don't leak. */
+  destroy() {
+    this.clearTimers()
+    for (const waiter of this.windowWaiters) {
+      try {
+        clearTimeout(waiter.timer)
+        waiter.resolve({
+          ok: false,
+          wakeReason: 'bout_over',
+          headline: 'RING CLOSED',
+          action: 'This ring was retired — pick another bout',
+        })
+      } catch {
+        /* ignore */
+      }
+    }
+    this.windowWaiters = []
+    for (const waiter of this.phraseWaiters) {
+      try {
+        waiter.resolve()
+      } catch {
+        /* ignore */
+      }
+    }
+    this.phraseWaiters = []
+    this.agentSubs.clear()
+  }
+
   private later(ms: number, fn: () => void) {
     const t = setTimeout(() => {
       this.timers.delete(t)
@@ -538,7 +566,7 @@ export class MatchEngine {
       throw new Error('Corners already claimed by other fighters')
     }
 
-    // Fresh canvas for the matched pair
+    // Fresh canvas for the matched pair — keep match id so arena routing stays stable
     this.clearTimers()
     this.coachAdvice = { red: [], blue: [] }
     this.coverLatch = { red: 0, blue: 0 }
@@ -546,7 +574,9 @@ export class MatchEngine {
     this.resetCombos()
     this.scoredMatchId = null
     this.agentKeys = {}
+    const keepId = this.state.id
     this.state = this.createLobby()
+    this.state.id = keepId
 
     let challengerCorner: Corner =
       preferredCorner === 'blue' ? 'blue' : preferredCorner === 'red' ? 'red' : 'red'

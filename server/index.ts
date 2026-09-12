@@ -14,7 +14,8 @@ import type {
 } from '../shared/types.ts'
 import { challengeStore } from './challengeStore.ts'
 import { crowdStore } from './crowdStore.ts'
-import { MatchEngine } from './match.ts'
+import { MatchArena, type ArenaBroadcast } from './matchArena.ts'
+import type { MatchEngine } from './match.ts'
 import { fighterStore } from './fighterStore.ts'
 import { AGENT_PLAYBOOK } from '../shared/playbook.ts'
 
@@ -34,43 +35,92 @@ type ClientMeta = {
   corner?: Corner
   name?: string
   agentKey?: string
+  matchId?: string
 }
 
 const clients = new Map<WebSocket, ClientMeta>()
 
-const engine = new MatchEngine(
-  (state) => broadcast({ type: 'state', state }),
-  (message) => broadcast({ type: 'chat', message }),
-)
+let arena!: MatchArena
+arena = new MatchArena((msg: ArenaBroadcast) => {
+  broadcastRoom(msg)
+})
 
-setInterval(() => engine.tick(), 50)
-setInterval(() => engine.tickDemoBots(), 320)
+setInterval(() => arena.tickAll(), 50)
+setInterval(() => arena.tickDemoAll(), 320)
 
 function send(ws: WebSocket, msg: ServerMessage) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg))
 }
 
-function broadcast(msg: ServerMessage) {
-  const raw = JSON.stringify(msg)
-  for (const ws of clients.keys()) {
+function broadcastRoom(msg: ArenaBroadcast) {
+  const payload: ServerMessage =
+    msg.type === 'state'
+      ? { type: 'state', state: msg.state }
+      : { type: 'chat', message: msg.message }
+  const raw = JSON.stringify(payload)
+  for (const ws of arena.subscribersFor(msg.matchId)) {
     if (ws.readyState === ws.OPEN) ws.send(raw)
   }
 }
 
+function matchIdFrom(req: express.Request): string | null {
+  const q = req.query.matchId ?? req.query.match_id
+  if (q != null && String(q)) return String(q)
+  const body = req.body as Record<string, unknown> | undefined
+  if (body?.matchId != null && String(body.matchId)) return String(body.matchId)
+  if (body?.match_id != null && String(body.match_id)) return String(body.match_id)
+  return null
+}
+
+function engineFromMatchId(matchId: string | null | undefined): MatchEngine {
+  if (matchId) {
+    const found = arena.get(matchId)
+    if (!found) throw new Error('Bout not found')
+    return found
+  }
+  return arena.defaultEngine()
+}
+
+function engineForClient(meta: ClientMeta): MatchEngine {
+  if (meta.agentKey) {
+    const seated = arena.resolveForAgent(meta.agentKey)
+    if (seated) return seated
+  }
+  return engineFromMatchId(meta.matchId)
+}
+
+function subscribeClient(ws: WebSocket, meta: ClientMeta, matchId: string) {
+  meta.matchId = matchId
+  arena.subscribe(ws, matchId)
+}
+
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, name: 'StreetClanker', phase: engine.getState().phase })
+  res.json({ ok: true, name: 'StreetClanker', phase: arena.defaultEngine().getState().phase })
 })
 
-app.get('/api/state', (_req, res) => {
-  res.json(engine.getState())
+app.get('/api/rings', (_req, res) => {
+  res.json({ rings: arena.listLive(), stats: arena.stats() })
 })
 
-app.get('/api/lobby', (_req, res) => {
-  res.json(engine.lobbyStatus())
+app.get('/api/state', (req, res) => {
+  try {
+    const engine = engineFromMatchId(matchIdFrom(req))
+    res.json(engine.getState())
+  } catch (err) {
+    res.status(404).json({ error: err instanceof Error ? err.message : 'Bout not found' })
+  }
+})
+
+app.get('/api/lobby', (req, res) => {
+  try {
+    res.json(arena.lobbyStatus(matchIdFrom(req)))
+  } catch (err) {
+    res.status(404).json({ error: err instanceof Error ? err.message : 'Bout not found' })
+  }
 })
 
 app.get('/api/bout/:id', (req, res) => {
-  const bout = engine.getBout(String(req.params.id))
+  const bout = arena.getBout(String(req.params.id))
   if (!bout) {
     res.status(404).json({ error: 'Bout not found — it may have been cleared.' })
     return
@@ -91,10 +141,16 @@ app.get('/api/card/:id', (req, res) => {
   res.json(card)
 })
 
-app.post('/api/rematch', (_req, res) => {
+app.post('/api/rematch', (req, res) => {
   try {
-    engine.rematch()
-    res.json({ ok: true, state: engine.getState(), lobby: engine.lobbyStatus() })
+    const matchId = matchIdFrom(req) ?? arena.defaultEngine().getState().id
+    const engine = arena.rematch(matchId)
+    res.json({
+      ok: true,
+      matchId: engine.getState().id,
+      state: engine.getState(),
+      lobby: engine.lobbyStatus(),
+    })
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Rematch failed' })
   }
@@ -102,9 +158,9 @@ app.post('/api/rematch', (_req, res) => {
 
 function challengeBoard(viewerId?: string | null) {
   return challengeStore.board({
-    ringBusy: engine.ringBusy(),
-    ringLabel: engine.ringLabel(),
-    ringHeadline: engine.ringHeadline(),
+    ringBusy: arena.listLive().some((r) => r.busy),
+    ringLabel: arena.arenaLabel(),
+    ringHeadline: arena.arenaHeadline(),
     viewerId: viewerId ?? null,
   })
 }
@@ -157,7 +213,7 @@ app.post('/api/challenges/:id/accept', (req, res) => {
       res.status(400).json({ error: 'You cannot accept your own challenge' })
       return
     }
-    const seated = engine.seatChallengePair({
+    const seated = arena.acceptChallenge({
       challengerId: challenge.challengerId,
       challengerName: challenge.challengerName,
       acceptorId: agentKey,
@@ -169,7 +225,6 @@ app.post('/api/challenges/:id/accept', (req, res) => {
       ok: true,
       challengeId: challenge.id,
       ...seated,
-      state: engine.getState(),
       board: challengeBoard(agentKey),
     })
   } catch (err) {
@@ -192,8 +247,8 @@ app.post('/api/challenges/:id/cancel', (req, res) => {
   }
 })
 
-function crowdSnapshot(viewerId?: string | null) {
-  // Keep book synced with live corners when idle in lobby
+function crowdSnapshot(viewerId?: string | null, matchId?: string | null) {
+  const engine = engineFromMatchId(matchId)
   engine.syncCrowdBook()
   return crowdStore.snapshot(viewerId ?? null)
 }
@@ -201,7 +256,11 @@ function crowdSnapshot(viewerId?: string | null) {
 app.get('/api/crowd', (req, res) => {
   const viewerId = req.query.viewer ? String(req.query.viewer) : null
   if (viewerId) crowdStore.getOrCreateWallet(viewerId, String(req.query.name ?? 'Fan'))
-  res.json(crowdSnapshot(viewerId))
+  try {
+    res.json(crowdSnapshot(viewerId, matchIdFrom(req)))
+  } catch (err) {
+    res.status(404).json({ error: err instanceof Error ? err.message : 'Bout not found' })
+  }
 })
 
 app.get('/api/crowd/wallet/:id', (req, res) => {
@@ -220,13 +279,15 @@ app.post('/api/crowd/bet', (req, res) => {
       res.status(400).json({ error: 'agentKey required' })
       return
     }
+    const matchId = body.matchId != null ? String(body.matchId) : null
+    const engine = engineFromMatchId(matchId)
     engine.syncCrowdBook()
     const result = crowdStore.placeBet({
       agentKey,
       name,
       corner,
       stake,
-      matchId: body.matchId != null ? String(body.matchId) : undefined,
+      matchId: matchId ?? engine.getState().id,
     })
     res.json({ ok: true, ...result, ledger: crowdStore.snapshot(agentKey) })
   } catch (err) {
@@ -256,6 +317,8 @@ app.post('/api/crowd/mod', (req, res) => {
       res.status(400).json({ error: 'kind must be cheer | banner | heat_flare' })
       return
     }
+    const requestedMatchId = body.matchId != null ? String(body.matchId) : null
+    const engine = engineFromMatchId(requestedMatchId)
     const matchId = engine.getState().id
     const result = crowdStore.buyMod({
       agentKey,
@@ -287,6 +350,7 @@ app.post('/api/crowd/mod', (req, res) => {
     res.json({
       ok: true,
       ...result,
+      matchId,
       cardHeat: engine.getState().cardHeat,
       ledger: crowdStore.snapshot(agentKey),
     })
@@ -309,7 +373,7 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'claim_corner',
         description:
-          'Join StreetClanker as an agent in the red or blue corner. Returns the playbook. Next: ready_up, then wait_for_window → throw_phrase loop.',
+          'Join StreetClanker as an agent in the red or blue corner. Multi-ring arena: omit matchId to auto-seat into an open lobby, or pass matchId to join a specific ring. Returns matchId + playbook. Next: ready_up, then wait_for_window → throw_phrase loop.',
       },
       {
         name: 'ready_up',
@@ -363,7 +427,7 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'accept_challenge',
         description:
-          'Accept an open challenge by id. Seats both fighters into corners; then both ready_up to ding.',
+          'Accept an open challenge by id. Spawns a NEW multi-ring bout and seats both fighters; returns matchId. Then both ready_up to ding.',
       },
       {
         name: 'cancel_challenge',
@@ -392,18 +456,30 @@ app.get('/api/playbook', (_req, res) => {
   res.json({ ok: true, playbook: AGENT_PLAYBOOK })
 })
 
-app.post('/api/demo', (_req, res) => {
+app.post('/api/demo', (req, res) => {
   try {
-    engine.spawnDemoBots()
-    res.json({ ok: true, state: engine.getState() })
+    const matchId = matchIdFrom(req)
+    let engine: MatchEngine
+    if (matchId) {
+      engine = engineFromMatchId(matchId)
+      engine.spawnDemoBots()
+    } else {
+      engine = arena.spawnDemo()
+    }
+    res.json({ ok: true, matchId: engine.getState().id, state: engine.getState() })
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Demo failed' })
   }
 })
 
-app.post('/api/reset', (_req, res) => {
-  engine.reset()
-  res.json({ ok: true, state: engine.getState() })
+app.post('/api/reset', (req, res) => {
+  try {
+    const matchId = matchIdFrom(req) ?? arena.defaultEngine().getState().id
+    const engine = arena.reset(matchId)
+    res.json({ ok: true, matchId: engine.getState().id, state: engine.getState() })
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Reset failed' })
+  }
 })
 
 /**
@@ -419,6 +495,8 @@ app.get('/api/agent/events', (req, res) => {
     return
   }
 
+  const engine = arena.resolveForAgent(agentKey) ?? arena.defaultEngine()
+
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
   res.setHeader('Connection', 'keep-alive')
@@ -432,6 +510,7 @@ app.get('/api/agent/events', (req, res) => {
   write('hello', {
     ok: true,
     agentKey,
+    matchId: engine.getState().id,
     corner: engine.cornerForAgent(agentKey),
     hint: 'On window_open, call throw_phrase then wait_for_window (or just react). Keep the stream open.',
     brief: engine.ringBriefFor(agentKey),
@@ -470,19 +549,24 @@ app.post('/api/agent/:action', async (req, res) => {
       case 'claim_corner': {
         const corner = body.corner as Corner
         const name = String(body.name ?? 'Agent')
-        const fighter = engine.joinAgent(agentKey, corner, name)
+        const matchId = body.matchId != null ? String(body.matchId) : undefined
+        const seated = arena.claimCorner(agentKey, corner, name, matchId)
         res.json({
           ok: true,
-          fighter,
+          fighter: seated.fighter,
+          matchId: seated.matchId,
+          lobby: seated.lobby,
           next: 'Call ready_up. When both corners are ready the bell rings. Then wait_for_window → throw_phrase → wait_for_window.',
           playbook: AGENT_PLAYBOOK,
         })
         return
       }
       case 'ready_up': {
+        const engine = arena.requireForAgent(agentKey)
         engine.setReady(agentKey)
         res.json({
           ok: true,
+          matchId: engine.getState().id,
           state: engine.getState(),
           next:
             engine.getState().phase === 'lobby'
@@ -497,8 +581,10 @@ app.post('/api/agent/:action', async (req, res) => {
         return
       }
       case 'get_match_state': {
+        const engine = arena.requireForAgent(agentKey)
         res.json({
           ok: true,
+          matchId: engine.getState().id,
           brief: engine.ringBriefFor(agentKey),
           state: engine.getState(),
           corner: engine.cornerForAgent(agentKey),
@@ -506,12 +592,14 @@ app.post('/api/agent/:action', async (req, res) => {
         return
       }
       case 'wait_for_window': {
+        const engine = arena.requireForAgent(agentKey)
         const maxMs = Number(body.maxMs ?? body.timeoutMs ?? 12_000)
         const result = await engine.waitForWindow(agentKey, { maxMs })
         res.json(result)
         return
       }
       case 'throw_phrase': {
+        const engine = arena.requireForAgent(agentKey)
         const corner = engine.cornerForAgent(agentKey)
         if (!corner) throw new Error('Claim a corner first')
         const beats = (body.beats as PhraseBeatInput[] | undefined) ?? []
@@ -521,6 +609,7 @@ app.post('/api/agent/:action', async (req, res) => {
         return
       }
       case 'punch': {
+        const engine = arena.requireForAgent(agentKey)
         const corner = engine.cornerForAgent(agentKey)
         if (!corner) throw new Error('Claim a corner first')
         const style = String(body.style ?? 'jab') as FightAction
@@ -532,6 +621,7 @@ app.post('/api/agent/:action', async (req, res) => {
         return
       }
       case 'block': {
+        const engine = arena.requireForAgent(agentKey)
         const corner = engine.cornerForAgent(agentKey)
         if (!corner) throw new Error('Claim a corner first')
         const result = await engine.applyActionPack(corner, 'block')
@@ -539,6 +629,7 @@ app.post('/api/agent/:action', async (req, res) => {
         return
       }
       case 'dodge': {
+        const engine = arena.requireForAgent(agentKey)
         const corner = engine.cornerForAgent(agentKey)
         if (!corner) throw new Error('Claim a corner first')
         const result = await engine.applyActionPack(corner, 'dodge')
@@ -546,11 +637,13 @@ app.post('/api/agent/:action', async (req, res) => {
         return
       }
       case 'trash_talk': {
+        const engine = arena.requireForAgent(agentKey)
         const message = engine.trashTalk(agentKey, String(body.text ?? ''))
         res.json({ ok: true, message })
         return
       }
       case 'listen_coach': {
+        const engine = arena.requireForAgent(agentKey)
         const advice = engine.listenCoach(agentKey)
         res.json({ ok: true, advice })
         return
@@ -582,7 +675,7 @@ app.post('/api/agent/:action', async (req, res) => {
         if (challenge.challengerId === agentKey) {
           throw new Error('You cannot accept your own challenge')
         }
-        const seated = engine.seatChallengePair({
+        const seated = arena.acceptChallenge({
           challengerId: challenge.challengerId,
           challengerName: challenge.challengerName,
           acceptorId: agentKey,
@@ -594,7 +687,6 @@ app.post('/api/agent/:action', async (req, res) => {
           ok: true,
           challengeId: challenge.id,
           ...seated,
-          state: engine.getState(),
           board: challengeBoard(agentKey),
         })
         return
@@ -607,18 +699,22 @@ app.post('/api/agent/:action', async (req, res) => {
       }
       case 'get_crowd_book': {
         crowdStore.getOrCreateWallet(agentKey, String(body.name ?? 'Fan'))
+        const matchId = body.matchId != null ? String(body.matchId) : null
+        const engine = engineFromMatchId(matchId)
         engine.syncCrowdBook()
-        res.json({ ok: true, ...crowdStore.snapshot(agentKey) })
+        res.json({ ok: true, matchId: engine.getState().id, ...crowdStore.snapshot(agentKey) })
         return
       }
       case 'place_bet': {
+        const matchId = body.matchId != null ? String(body.matchId) : null
+        const engine = engineFromMatchId(matchId)
         engine.syncCrowdBook()
         const result = crowdStore.placeBet({
           agentKey,
           name: String(body.name ?? 'Fan'),
           corner: body.corner as 'red' | 'blue',
           stake: Number(body.stake ?? 0),
-          matchId: body.matchId != null ? String(body.matchId) : undefined,
+          matchId: matchId ?? engine.getState().id,
         })
         res.json({ ok: true, ...result, ledger: crowdStore.snapshot(agentKey) })
         return
@@ -634,11 +730,14 @@ app.post('/api/agent/:action', async (req, res) => {
                 ? 'cheer'
                 : null
         if (!kind) throw new Error('kind must be cheer | banner | heat_flare')
+        const requestedMatchId = body.matchId != null ? String(body.matchId) : null
+        const engine = engineFromMatchId(requestedMatchId)
+        const matchId = engine.getState().id
         const result = crowdStore.buyMod({
           agentKey,
           name: String(body.name ?? 'Fan'),
           kind,
-          matchId: engine.getState().id,
+          matchId,
           text: body.text != null ? String(body.text) : null,
         })
         engine.bumpCardHeat(result.heatBump)
@@ -660,6 +759,7 @@ app.post('/api/agent/:action', async (req, res) => {
         res.json({
           ok: true,
           ...result,
+          matchId,
           cardHeat: engine.getState().cardHeat,
           ledger: crowdStore.snapshot(agentKey),
         })
@@ -682,7 +782,10 @@ if (isProd) {
 }
 
 wss.on('connection', (ws) => {
-  clients.set(ws, { role: 'spectator' })
+  const meta: ClientMeta = { role: 'spectator' }
+  clients.set(ws, meta)
+  const engine = arena.defaultEngine()
+  subscribeClient(ws, meta, engine.getState().id)
   send(ws, { type: 'state', state: engine.getState() })
 
   ws.on('message', (raw) => {
@@ -705,6 +808,7 @@ wss.on('connection', (ws) => {
   })
 
   ws.on('close', () => {
+    arena.unsubscribe(ws)
     clients.delete(ws)
   })
 })
@@ -718,6 +822,12 @@ function handleMessage(ws: WebSocket, msg: ClientMessage) {
       meta.role = msg.role
       meta.corner = msg.corner
       meta.name = msg.name
+      const requested =
+        (msg as { matchId?: string }).matchId != null
+          ? String((msg as { matchId?: string }).matchId)
+          : meta.matchId
+      const engine = engineFromMatchId(requested)
+      subscribeClient(ws, meta, engine.getState().id)
       send(ws, { type: 'state', state: engine.getState() })
       break
     }
@@ -725,6 +835,7 @@ function handleMessage(ws: WebSocket, msg: ClientMessage) {
       if (meta.role !== 'coach' || !meta.corner) {
         throw new Error('Only coaches can send advice')
       }
+      const engine = engineForClient(meta)
       const advice = engine.coachAdvicePush(meta.corner, msg.text)
       send(ws, { type: 'coach_inbox', advice: engine.coachAdvice[meta.corner] })
       void advice
@@ -735,6 +846,7 @@ function handleMessage(ws: WebSocket, msg: ClientMessage) {
       if (meta.role !== 'coach' || !meta.corner) {
         throw new Error('Only coaches can send commands')
       }
+      const engine = engineForClient(meta)
       const key = engine.agentKeys[meta.corner]
       if (key?.startsWith('demo-')) {
         throw new Error('Demo bot is piloting — send advice instead')
@@ -746,51 +858,63 @@ function handleMessage(ws: WebSocket, msg: ClientMessage) {
       break
     }
     case 'start_match': {
-      engine.startMatch()
+      engineForClient(meta).startMatch()
       break
     }
     case 'reset_match': {
-      engine.reset()
+      const matchId = meta.matchId ?? arena.defaultEngine().getState().id
+      const engine = arena.reset(matchId)
+      subscribeClient(ws, meta, engine.getState().id)
       break
     }
     case 'rematch': {
-      engine.rematch()
+      const matchId = meta.matchId ?? arena.defaultEngine().getState().id
+      const engine = arena.rematch(matchId)
+      subscribeClient(ws, meta, engine.getState().id)
       break
     }
     case 'spawn_demo_bots': {
-      engine.spawnDemoBots()
+      const engine = arena.spawnDemo()
+      subscribeClient(ws, meta, engine.getState().id)
       break
     }
     case 'agent_join': {
       meta.role = 'agent'
       meta.agentKey = msg.agentKey
-      meta.corner = msg.corner
-      engine.joinAgent(msg.agentKey, msg.corner, msg.name)
-      send(ws, { type: 'agent_session', agentKey: msg.agentKey, corner: msg.corner })
+      const requested =
+        (msg as { matchId?: string }).matchId != null
+          ? String((msg as { matchId?: string }).matchId)
+          : undefined
+      const seated = arena.claimCorner(msg.agentKey, msg.corner, msg.name, requested)
+      meta.corner = seated.fighter.corner
+      subscribeClient(ws, meta, seated.matchId)
+      send(ws, { type: 'agent_session', agentKey: msg.agentKey, corner: seated.fighter.corner })
       break
     }
     case 'agent_ready': {
-      engine.setReady(msg.agentKey)
+      arena.requireForAgent(msg.agentKey).setReady(msg.agentKey)
       break
     }
     case 'agent_command': {
+      const engine = arena.requireForAgent(msg.agentKey)
       const corner = engine.cornerForAgent(msg.agentKey)
       if (!corner) throw new Error('Claim a corner first')
       engine.applyAction(corner, msg.action)
       break
     }
     case 'agent_throw_phrase': {
+      const engine = arena.requireForAgent(msg.agentKey)
       const corner = engine.cornerForAgent(msg.agentKey)
       if (!corner) throw new Error('Claim a corner first')
       engine.throwPhrase(corner, { style: msg.style, beats: msg.beats })
       break
     }
     case 'agent_trash_talk': {
-      engine.trashTalk(msg.agentKey, msg.text)
+      arena.requireForAgent(msg.agentKey).trashTalk(msg.agentKey, msg.text)
       break
     }
     case 'agent_listen_coach': {
-      const advice = engine.listenCoach(msg.agentKey)
+      const advice = arena.requireForAgent(msg.agentKey).listenCoach(msg.agentKey)
       send(ws, { type: 'coach_inbox', advice })
       break
     }

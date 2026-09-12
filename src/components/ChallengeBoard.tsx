@@ -76,10 +76,21 @@ export function ChallengeBoard({ agentKey, defaultName = 'Challenger', onMatched
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agentKey, name: name.trim() || defaultName }),
       })
-      const data = (await res.json()) as { error?: string; board?: ChallengeBoardData }
+      const data = (await res.json()) as {
+        error?: string
+        board?: ChallengeBoardData
+        matchId?: string
+        lobby?: { matchId?: string; watchPath?: string }
+      }
       if (!res.ok) throw new Error(data.error ?? 'Accept failed')
       if (data.board) setBoard(data.board)
       else await refresh()
+      const boutId = data.matchId ?? data.lobby?.matchId
+      if (boutId) {
+        flashMsg('Matched — opening your ring. Ready up to ding.')
+        window.location.href = `/?watch=1&bout=${boutId}`
+        return
+      }
       flashMsg('Matched — corners seated. Ready up to ding.')
       onMatched?.()
     } catch (err) {
@@ -199,7 +210,7 @@ export function ChallengeBoard({ agentKey, defaultName = 'Challenger', onMatched
             <button
               type="button"
               className="claim blue"
-              disabled={busy || board?.ringBusy}
+              disabled={busy}
               onClick={() => void accept(c.id)}
             >
               Accept

@@ -58,18 +58,24 @@ function roundOdds(n: number) {
 
 type PersistShape = { wallets: CrowdWallet[] }
 
+type BookState = {
+  matchId: string
+  status: BookStatus
+  redName: string
+  blueName: string
+  redOdds: number
+  blueOdds: number
+  winner: Corner | 'draw' | null
+}
+
 export class CrowdStore {
   private wallets = new Map<string, CrowdWallet>()
   private bets = new Map<string, CrowdBet>()
   private mods: CrowdMod[] = []
-  private matchId: string | null = null
-  private status: BookStatus = 'closed'
-  private redName = 'Red'
-  private blueName = 'Blue'
-  private redOdds = 1.9
-  private blueOdds = 1.9
-  private winner: Corner | 'draw' | null = null
-  private settledMatchId: string | null = null
+  /** Per-bout books — concurrent rings keep independent money lines. */
+  private books = new Map<string, BookState>()
+  /** Last book touched — used when snapshot() omits matchId. */
+  private focusMatchId: string | null = null
   private saveTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor() {
@@ -145,26 +151,53 @@ export class CrowdStore {
     return [...this.bets.values()].filter((b) => b.matchId === matchId)
   }
 
-  book(): CrowdBook {
-    const matchId = this.matchId ?? 'none'
-    const bets = this.matchId ? this.matchBets(this.matchId) : []
+  private resolveBook(matchId?: string | null): BookState | null {
+    if (matchId && this.books.has(matchId)) return this.books.get(matchId)!
+    if (this.focusMatchId && this.books.has(this.focusMatchId)) {
+      return this.books.get(this.focusMatchId)!
+    }
+    // Prefer an open book, else any book
+    for (const book of this.books.values()) {
+      if (book.status === 'open') return book
+    }
+    return [...this.books.values()].at(-1) ?? null
+  }
+
+  book(matchId?: string | null): CrowdBook {
+    const state = this.resolveBook(matchId)
+    if (!state) {
+      return {
+        matchId: matchId ?? 'none',
+        status: 'closed',
+        redName: 'Red',
+        blueName: 'Blue',
+        redOdds: 1.9,
+        blueOdds: 1.9,
+        redPool: 0,
+        bluePool: 0,
+        betCount: 0,
+        winner: null,
+        mods: [],
+      }
+    }
+    const bets = this.matchBets(state.matchId)
     return {
-      matchId,
-      status: this.status,
-      redName: this.redName,
-      blueName: this.blueName,
-      redOdds: this.redOdds,
-      blueOdds: this.blueOdds,
+      matchId: state.matchId,
+      status: state.status,
+      redName: state.redName,
+      blueName: state.blueName,
+      redOdds: state.redOdds,
+      blueOdds: state.blueOdds,
       redPool: bets.filter((b) => b.corner === 'red').reduce((s, b) => s + b.stake, 0),
       bluePool: bets.filter((b) => b.corner === 'blue').reduce((s, b) => s + b.stake, 0),
       betCount: bets.length,
-      winner: this.winner,
-      mods: this.mods.filter((m) => m.matchId === matchId).slice(-8).reverse(),
+      winner: state.winner,
+      mods: this.mods.filter((m) => m.matchId === state.matchId).slice(-8).reverse(),
     }
   }
 
-  snapshot(viewerId?: string | null): CrowdLedgerSnapshot {
-    const book = this.book()
+  snapshot(viewerId?: string | null, matchId?: string | null): CrowdLedgerSnapshot {
+    const book = this.book(matchId)
     const wallet = viewerId ? this.getWallet(viewerId) : null
     const myBets = viewerId
       ? [...this.bets.values()]
@@ -183,39 +216,50 @@ export class CrowdStore {
     redRecord?: FighterRecord | null
     blueRecord?: FighterRecord | null
   }) {
-    if (this.matchId === input.matchId && (this.status === 'locked' || this.status === 'settled')) {
-      return this.book()
+    const existing = this.books.get(input.matchId)
+    if (existing && (existing.status === 'locked' || existing.status === 'settled')) {
+      this.focusMatchId = input.matchId
+      return this.book(input.matchId)
     }
 
     const odds = moneylineOdds(input.redRecord, input.blueRecord)
-    this.matchId = input.matchId
-    this.status = 'open'
-    this.redName = input.redName
-    this.blueName = input.blueName
-    this.redOdds = odds.red
-    this.blueOdds = odds.blue
-    this.winner = null
-    this.settledMatchId = null
-
-    for (const [id, bet] of this.bets) {
-      if (bet.status === 'open' && bet.matchId !== input.matchId) {
-        this.refundBet(bet)
-        this.bets.delete(id)
-      }
-    }
-    return this.book()
+    this.books.set(input.matchId, {
+      matchId: input.matchId,
+      status: 'open',
+      redName: input.redName,
+      blueName: input.blueName,
+      redOdds: odds.red,
+      blueOdds: odds.blue,
+      winner: null,
+    })
+    this.focusMatchId = input.matchId
+    // Do NOT refund other matches — concurrent rings keep their books.
+    return this.book(input.matchId)
   }
 
   lockBook(matchId: string) {
-    if (this.matchId !== matchId) return this.book()
-    if (this.status === 'open') this.status = 'locked'
-    return this.book()
+    const state = this.books.get(matchId)
+    if (!state) return this.book(matchId)
+    if (state.status === 'open') state.status = 'locked'
+    this.focusMatchId = matchId
+    return this.book(matchId)
   }
 
-  closeBook() {
-    this.status = 'closed'
-    this.matchId = null
-    this.winner = null
+  closeBook(matchId?: string | null) {
+    if (matchId) {
+      const state = this.books.get(matchId)
+      if (state) {
+        state.status = 'closed'
+        state.winner = null
+      }
+      return this.book(matchId)
+    }
+    for (const state of this.books.values()) {
+      if (state.status === 'open' || state.status === 'locked') {
+        state.status = 'closed'
+        state.winner = null
+      }
+    }
     return this.book()
   }
 
@@ -226,16 +270,17 @@ export class CrowdStore {
     stake: number
     matchId?: string
   }): { bet: CrowdBet; wallet: CrowdWallet; book: CrowdBook } {
-    if (this.status !== 'open' || !this.matchId) {
-      if (this.status === 'locked') {
+    const state = this.resolveBook(input.matchId)
+    if (!state || state.status !== 'open') {
+      if (state?.status === 'locked') {
         throw new Error('Bell rang — betting is locked for this bout')
       }
-      if (this.status === 'settled') {
+      if (state?.status === 'settled') {
         throw new Error('Bout already settled — wait for the next card')
       }
       throw new Error('Book is closed — wait for both corners, bet before the bell')
     }
-    if (input.matchId && input.matchId !== this.matchId) {
+    if (input.matchId && input.matchId !== state.matchId) {
       throw new Error('Stale bout — refresh the crowd book')
     }
     if (input.agentKey.startsWith('demo-')) {
@@ -254,17 +299,17 @@ export class CrowdStore {
       throw new Error(`Not enough chips — you have ${wallet.chips}`)
     }
 
-    const existing = this.matchBets(this.matchId).find(
+    const existing = this.matchBets(state.matchId).find(
       (b) => b.bettorId === input.agentKey && b.status === 'open',
     )
     if (existing) throw new Error('You already have a ticket on this bout')
 
-    const odds = input.corner === 'red' ? this.redOdds : this.blueOdds
+    const odds = input.corner === 'red' ? state.redOdds : state.blueOdds
     wallet.chips -= stake
     wallet.updatedAt = Date.now()
     const bet: CrowdBet = {
       id: randomUUID(),
-      matchId: this.matchId,
+      matchId: state.matchId,
       bettorId: input.agentKey,
       bettorName: wallet.name,
       corner: input.corner,
@@ -276,29 +321,32 @@ export class CrowdStore {
       settledAt: null,
     }
     this.bets.set(bet.id, bet)
+    this.focusMatchId = state.matchId
     this.scheduleSave()
-    return { bet, wallet: { ...wallet }, book: this.book() }
-  }
-
-  private refundBet(bet: CrowdBet) {
-    if (bet.status !== 'open') return
-    const wallet = this.wallets.get(bet.bettorId)
-    if (wallet) {
-      wallet.chips += bet.stake
-      wallet.updatedAt = Date.now()
-    }
-    bet.status = 'refunded'
-    bet.payout = bet.stake
-    bet.settledAt = Date.now()
+    return { bet, wallet: { ...wallet }, book: this.book(state.matchId) }
   }
 
   settle(input: { matchId: string; winner: Corner | 'draw' | null }) {
-    if (this.settledMatchId === input.matchId) return this.book()
     const matchId = input.matchId
-    this.settledMatchId = matchId
-    this.matchId = matchId
-    this.status = 'settled'
-    this.winner = input.winner
+    let state = this.books.get(matchId)
+    if (!state) {
+      state = {
+        matchId,
+        status: 'settled',
+        redName: 'Red',
+        blueName: 'Blue',
+        redOdds: 1.9,
+        blueOdds: 1.9,
+        winner: input.winner,
+      }
+      this.books.set(matchId, state)
+    }
+    if (state.status === 'settled' && state.winner != null) {
+      return this.book(matchId)
+    }
+    state.status = 'settled'
+    state.winner = input.winner
+    this.focusMatchId = matchId
 
     for (const bet of this.matchBets(matchId)) {
       if (bet.status !== 'open') continue
@@ -325,7 +373,7 @@ export class CrowdStore {
       bet.settledAt = Date.now()
     }
     this.scheduleSave()
-    return this.book()
+    return this.book(matchId)
   }
 
   buyMod(input: {
@@ -361,8 +409,9 @@ export class CrowdStore {
     }
     this.mods = [...this.mods, mod].slice(-40)
     this.scheduleSave()
+    this.focusMatchId = input.matchId
     const heatBump = input.kind === 'heat_flare' ? 5 : input.kind === 'cheer' ? 2 : 1
-    return { mod, wallet: { ...wallet }, heatBump, book: this.book() }
+    return { mod, wallet: { ...wallet }, heatBump, book: this.book(input.matchId) }
   }
 }
 

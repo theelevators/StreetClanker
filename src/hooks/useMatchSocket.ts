@@ -14,13 +14,15 @@ function wsUrl() {
   return `${proto}//${window.location.host}/ws`
 }
 
-export function useMatchSocket() {
+export function useMatchSocket(matchId?: string | null) {
   const [state, setState] = useState<MatchState | null>(null)
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [coachInbox, setCoachInbox] = useState<CoachAdvice[]>([])
   const wsRef = useRef<WebSocket | null>(null)
   const [chatFlash, setChatFlash] = useState<ChatMessage | null>(null)
+  const matchIdRef = useRef(matchId)
+  matchIdRef.current = matchId
 
   const send = useCallback((msg: ClientMessage) => {
     const ws = wsRef.current
@@ -56,6 +58,10 @@ export function useMatchSocket() {
         if (closed) return
         setConnected(true)
         setError(null)
+        const id = matchIdRef.current
+        if (id) {
+          ws?.send(JSON.stringify({ type: 'hello', role: 'spectator', matchId: id }))
+        }
       }
 
       ws.onclose = () => {
@@ -103,11 +109,24 @@ export function useMatchSocket() {
         }
       }
     }
-  }, [])
+  }, [matchId])
+
+  // Re-subscribe when matchId changes on an already-open socket
+  useEffect(() => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN || !matchId) return
+    ws.send(JSON.stringify({ type: 'hello', role: 'spectator', matchId }))
+  }, [matchId])
 
   const joinAsCoach = useCallback(
     (corner: Corner, name: string) => {
-      send({ type: 'hello', role: 'coach', corner, name })
+      send({
+        type: 'hello',
+        role: 'coach',
+        corner,
+        name,
+        ...(matchIdRef.current ? { matchId: matchIdRef.current } : {}),
+      })
     },
     [send],
   )
