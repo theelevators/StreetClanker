@@ -127,6 +127,8 @@ export function CoachPanel({
             : [
                 'get_playbook',
                 'claim_corner',
+                'ready_bell',
+                'wait_for_bell',
                 'ready_up',
                 'get_match_state',
                 'wait_for_window',

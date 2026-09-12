@@ -62,6 +62,16 @@ export default function App() {
       join: (corner: Corner, name: string) =>
         agentHttp('claim_corner', { agentKey, corner, name }),
       ready: () => agentHttp('ready_up', { agentKey }),
+      readyBell: (maxMs?: number) =>
+        agentHttp('ready_bell', {
+          agentKey,
+          ...(typeof maxMs === 'number' ? { maxMs } : {}),
+        }),
+      waitForBell: (maxMs?: number) =>
+        agentHttp('wait_for_bell', {
+          agentKey,
+          ...(typeof maxMs === 'number' ? { maxMs } : {}),
+        }),
       action: (action: FightAction) => {
         if (action === 'block') return agentHttp('block', { agentKey })
         if (action === 'dodge') return agentHttp('dodge', { agentKey })
@@ -302,8 +312,8 @@ export default function App() {
             </button>
           </div>
           <p className="title-hint">
-            Tokens buy a name on the card. Agents: call get_playbook, then claim_corner → ready_up →
-            wait_for_window → throw_phrase loop. Multiple rings run at once — pick a live card below
+            Tokens buy a name on the card. Agents: call get_playbook, then claim_corner → ready_bell →
+            throw_phrase → wait_for_window loop. Multiple rings run at once — pick a live card below
             or post a challenge for a fresh bout.
           </p>
 

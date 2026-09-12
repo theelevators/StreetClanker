@@ -52,6 +52,8 @@ type Options = {
   sendAgent: {
     join: (corner: Corner, name: string) => Promise<ToolResult>
     ready: () => Promise<ToolResult>
+    readyBell: (maxMs?: number) => Promise<ToolResult>
+    waitForBell: (maxMs?: number) => Promise<ToolResult>
     action: (action: FightAction) => Promise<ToolResult>
     throwPhrase: (
       style: PhraseStyle | undefined,
@@ -128,7 +130,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'claim_corner',
         description:
-          'Join StreetClanker as a fighting agent. Pick red or blue corner and a fighter name. Returns the playbook. Next: ready_up, then stay in wait_for_window → throw_phrase → wait_for_window until the bout ends.',
+          'Join StreetClanker as a fighting agent. Pick red or blue corner and a fighter name. Returns the playbook. Next: ready_bell (hangs until THROW NOW), then throw_phrase → wait_for_window until the bout ends.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -155,14 +157,53 @@ export function useWebMCP(options: Options) {
       {
         name: 'ready_up',
         description:
-          'Signal ready for the bout or next round. When BOTH corners are ready the bell rings. Then call wait_for_window and keep looping.',
+          'Signal ready (returns immediately). Prefer ready_bell for MCP/Codex — it hangs until THROW NOW so you stay in the tool loop. When BOTH corners are ready the bell rings.',
         inputSchema: { type: 'object', properties: {} },
         execute: wrap('ready_up', async () => optionsRef.current.sendAgent.ready()),
       },
       {
+        name: 'ready_bell',
+        description:
+          'MCP CRITICAL. Marks you ready AND long-polls until the bell path finishes and your first throw window opens (or bout ends). Keeps Codex/WebMCP in the tool loop so you are not late to the opening exchange. Prefer this over ready_up. Optional maxMs (250–90000, default 45000). When it returns THROW NOW, fire throw_phrase then wait_for_window.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            maxMs: {
+              type: 'number',
+              description: 'Max time to wait for the bell / first window (ms)',
+            },
+          },
+        },
+        execute: wrap('ready_bell', async (args) =>
+          optionsRef.current.sendAgent.readyBell(
+            typeof args.maxMs === 'number' ? args.maxMs : undefined,
+          ),
+        ),
+      },
+      {
+        name: 'wait_for_bell',
+        description:
+          'Long-poll through lobby/countdown until fighting + window open (does not mark ready). Prefer ready_bell which combines both. Optional maxMs (default 45000).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            maxMs: {
+              type: 'number',
+              description: 'Max time to wait (ms)',
+            },
+          },
+        },
+        annotations: { readOnlyHint: true },
+        execute: wrap('wait_for_bell', async (args) =>
+          optionsRef.current.sendAgent.waitForBell(
+            typeof args.maxMs === 'number' ? args.maxMs : undefined,
+          ),
+        ),
+      },
+      {
         name: 'get_match_state',
         description:
-          'StreetClanker ring brief: phase, your window timing, foe telegraph, card heat, announcer line, coach whisper. Prefer wait_for_window during a live bout so you stay in the tool loop.',
+          'StreetClanker ring brief: phase, your window timing, foe telegraph, card heat, announcer line, coach whisper. Prefer ready_bell before the ding and wait_for_window during a live bout.',
         inputSchema: { type: 'object', properties: {} },
         annotations: { readOnlyHint: true },
         execute: wrap('get_match_state', async () => optionsRef.current.sendAgent.brief()),
@@ -170,7 +211,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'wait_for_window',
         description:
-          'CRITICAL FIGHT LOOP TOOL. Blocks until your window opens, then returns a COMPACT wake pack (headline, HP/STM, suggested combos). Read headline first. After every throw_phrase, call this again and keep looping. Optional maxMs (250–45000, default 12000).',
+          'CRITICAL FIGHT LOOP TOOL. Blocks until your window opens, then returns a COMPACT wake pack (headline, HP/STM, suggested combos). Read headline first. After every throw_phrase, call this again and keep looping. Optional maxMs (250–45000, default 12000). Before the bout starts, prefer ready_bell.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -343,7 +384,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'accept_challenge',
         description:
-          'Accept an open challenge by id. Seats both fighters into corners; both must ready_up to ding.',
+          'Accept an open challenge by id. Seats both fighters into corners; both should call ready_bell (hangs until THROW NOW).',
         inputSchema: {
           type: 'object',
           properties: {

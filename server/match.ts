@@ -170,9 +170,10 @@ export type AgentWakeReason =
   | 'phase_change'
   | 'timeout'
   | 'impact'
+  | 'bell'
 
 export type AgentRingEvent = {
-  type: 'window_open' | 'phase' | 'impact' | 'brief' | 'coach' | 'heartbeat'
+  type: 'window_open' | 'phase' | 'impact' | 'brief' | 'coach' | 'heartbeat' | 'bell'
   agentKey?: string
   corner?: Corner
   at: number
@@ -185,7 +186,8 @@ type WindowWaiter = {
   agentKey: string
   resolve: (value: Record<string, unknown>) => void
   timer: ReturnType<typeof setTimeout>
-  want: 'window' | 'any'
+  /** window = exchange open; bell = lobby/countdown → first throw window */
+  want: 'window' | 'bell' | 'any'
 }
 
 export class MatchEngine {
@@ -1543,6 +1545,84 @@ export class MatchEngine {
     })
   }
 
+  /**
+   * MCP-critical long-poll: optionally mark ready, then hang until the bell
+   * path finishes and your first throw window opens (or the bout ends).
+   * Codex/WebMCP drop out of the tool loop between short tools — parking on
+   * this call keeps both corners synced into the opening exchange.
+   */
+  async readyBell(
+    agentKey: string,
+    opts: { maxMs?: number; ready?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
+    const corner = this.cornerForAgent(agentKey)
+    if (!corner) {
+      throw new Error('Claim a corner first')
+    }
+
+    const shouldReady = opts.ready !== false
+    const phase = this.state.phase
+    if (
+      shouldReady &&
+      (phase === 'lobby' || phase === 'between_rounds') &&
+      !this.state[corner].ready
+    ) {
+      this.setReady(agentKey)
+    }
+
+    return this.waitForBell(agentKey, { maxMs: opts.maxMs })
+  }
+
+  /**
+   * Block through lobby / countdown until fighting + window open (or bout over).
+   * Does not mark ready — use readyBell for the combined MCP flow.
+   */
+  waitForBell(
+    agentKey: string,
+    opts: { maxMs?: number } = {},
+  ): Promise<Record<string, unknown>> {
+    const corner = this.cornerForAgent(agentKey)
+    if (!corner) {
+      return Promise.reject(new Error('Claim a corner first'))
+    }
+    this.touchAgent(corner)
+    // Longer default than wait_for_window — waiting on a human/agent to ready up.
+    const maxMs = Math.min(Math.max(opts.maxMs ?? 45_000, 250), 90_000)
+
+    const snap = this.bellWakeSnapshot(agentKey, 'bell')
+    if (snap.shouldWake) {
+      return Promise.resolve(snap.payload)
+    }
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.windowWaiters = this.windowWaiters.filter((w) => w.timer !== timer)
+        this.touchAgent(corner)
+        resolve(this.bellWakeSnapshot(agentKey, 'timeout').payload)
+      }, maxMs)
+      this.windowWaiters.push({
+        agentKey,
+        resolve: (value) => {
+          clearTimeout(timer)
+          this.touchAgent(corner)
+          resolve(value)
+        },
+        timer,
+        want: 'bell',
+      })
+    })
+  }
+
+  private bellWakeSnapshot(agentKey: string, reason: AgentWakeReason) {
+    const payload = this.slimWake(agentKey, reason === 'timeout' ? 'timeout' : 'bell')
+    const wake = payload.wakeReason as AgentWakeReason
+    const shouldWake =
+      reason === 'timeout' ||
+      wake === 'window_open' ||
+      wake === 'bout_over'
+    return { shouldWake, payload }
+  }
+
   private agentWakeSnapshot(agentKey: string, reason: AgentWakeReason) {
     const payload = this.slimWake(agentKey, reason)
     const wake = payload.wakeReason as AgentWakeReason
@@ -1580,7 +1660,10 @@ export class MatchEngine {
     if (this.windowWaiters.length === 0) return
     const still: WindowWaiter[] = []
     for (const waiter of this.windowWaiters) {
-      const snap = this.agentWakeSnapshot(waiter.agentKey, 'window_open')
+      const snap =
+        waiter.want === 'bell'
+          ? this.bellWakeSnapshot(waiter.agentKey, 'bell')
+          : this.agentWakeSnapshot(waiter.agentKey, 'window_open')
       const phase = this.state.phase
       const wake =
         snap.shouldWake ||
@@ -1759,14 +1842,20 @@ export class MatchEngine {
     if (phase === 'fighting' && windowOpen) {
       wakeReason = 'window_open'
       action = 'THROW NOW — fire throw_phrase (returns a full combo pack), then wait_for_window'
+    } else if (phase === 'lobby' || phase === 'countdown') {
+      wakeReason = reason === 'timeout' ? 'timeout' : 'bell'
+      action =
+        phase === 'countdown'
+          ? 'Countdown live — stay parked; next wake is THROW NOW'
+          : 'Waiting on the other corner / bell — keep ready_bell hanging or call it again'
     } else if (phase === 'between_rounds') {
       wakeReason = 'corner_break'
-      action = 'Corner break — listen_coach, then wait_for_window'
+      action = 'Corner break — listen_coach, then ready_bell (or wait_for_window after the next ding)'
     } else if (phase === 'ended' || phase === 'knockout' || phase === 'decision') {
       wakeReason = 'bout_over'
       action = 'Bout over — stop the fight loop'
     } else if (reason === 'timeout') {
-      action = 'Timeout — skim headline, then wait_for_window or throw_phrase if windowOpen'
+      action = 'Timeout — skim headline, then ready_bell / wait_for_window or throw_phrase if windowOpen'
     }
 
     const suggestions = this.suggestedCombos(you?.stamina ?? 0)
@@ -1778,7 +1867,11 @@ export class MatchEngine {
           ? 'BOUT OVER'
           : wakeReason === 'corner_break'
             ? 'CORNER BREAK — plan next round'
-            : `Waiting (${wakeReason})`
+            : wakeReason === 'bell' || phase === 'lobby' || phase === 'countdown'
+              ? phase === 'countdown'
+                ? 'BELL PATH — COUNTDOWN'
+                : 'WAITING FOR BELL — stay in ready_bell'
+              : `Waiting (${wakeReason})`
 
     return {
       ok: true,
@@ -1806,7 +1899,7 @@ export class MatchEngine {
       suggested: suggestions,
       windowOpen,
       phase,
-      tip: 'Prefer throw_phrase packs over reading every field. Loop: wait_for_window → throw_phrase → wait_for_window.',
+      tip: 'MCP tip: after claim_corner call ready_bell (hangs until THROW NOW). Then loop wait_for_window → throw_phrase → wait_for_window.',
     }
   }
 

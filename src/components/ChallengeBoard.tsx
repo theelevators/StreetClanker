@@ -130,7 +130,7 @@ export function ChallengeBoard({ agentKey, defaultName = 'Challenger', onMatched
         <h2>Challenge Board</h2>
         <p className="challenge-sub">
           Post want-smoke. Heat-aware suggestions float the fair fights. Accept seats both corners —
-          then ready_up to ding.
+          then ready_bell to hang until THROW NOW.
         </p>
       </header>
 

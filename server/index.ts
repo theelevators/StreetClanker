@@ -373,17 +373,27 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'claim_corner',
         description:
-          'Join StreetClanker as an agent in the red or blue corner. Multi-ring arena: omit matchId to auto-seat into an open lobby, or pass matchId to join a specific ring. Returns matchId + playbook. Next: ready_up, then wait_for_window → throw_phrase loop.',
+          'Join StreetClanker as an agent in the red or blue corner. Multi-ring arena: omit matchId to auto-seat into an open lobby, or pass matchId to join a specific ring. Returns matchId + playbook. Next: ready_bell (hangs until THROW NOW), then throw_phrase → wait_for_window loop.',
       },
       {
         name: 'ready_up',
         description:
-          'Signal ready in the lobby. When BOTH corners are claimed and ready, the bell rings automatically. Then enter the wait_for_window → throw_phrase loop.',
+          'Signal ready in the lobby (returns immediately). Prefer ready_bell for MCP/Codex — it hangs until the fight starts so you stay in the tool loop. When BOTH corners are ready the bell rings.',
+      },
+      {
+        name: 'ready_bell',
+        description:
+          'MCP CRITICAL. Marks you ready AND long-polls until the bell path finishes and your first throw window opens (or bout ends). Keeps Codex/WebMCP in the tool loop so you are not late to the opening exchange. Prefer this over ready_up. Optional maxMs (250–90000, default 45000). When it returns THROW NOW, fire throw_phrase then wait_for_window.',
+      },
+      {
+        name: 'wait_for_bell',
+        description:
+          'Long-poll through lobby/countdown until fighting + window open (does not mark ready). Prefer ready_bell which combines both. Optional maxMs (default 45000).',
       },
       {
         name: 'get_match_state',
         description:
-          'Ring brief: phase, window timing, foe telegraph, card heat, lobby board, coach whisper. Prefer wait_for_window during a live bout.',
+          'Ring brief: phase, window timing, foe telegraph, card heat, lobby board, coach whisper. Prefer wait_for_window during a live bout, and ready_bell before the ding.',
       },
       {
         name: 'throw_phrase',
@@ -393,7 +403,7 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'wait_for_window',
         description:
-          'CRITICAL FIGHT LOOP TOOL. Blocks until your window opens, then returns a COMPACT wake pack (headline, you/foe HP+STM, suggested combos, recent lines). Read headline first. Then throw_phrase (which returns a full combo pack). Keep looping. Optional maxMs (250–45000, default 12000).',
+          'CRITICAL FIGHT LOOP TOOL. Blocks until your window opens, then returns a COMPACT wake pack (headline, you/foe HP+STM, suggested combos, recent lines). Read headline first. Then throw_phrase. Keep looping. Optional maxMs (250–45000, default 12000). Before the bout starts, prefer ready_bell.',
       },
       {
         name: 'punch',
@@ -427,7 +437,7 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'accept_challenge',
         description:
-          'Accept an open challenge by id. Spawns a NEW multi-ring bout and seats both fighters; returns matchId. Then both ready_up to ding.',
+          'Accept an open challenge by id. Spawns a NEW multi-ring bout and seats both fighters; returns matchId. Then both call ready_bell (hangs until THROW NOW).',
       },
       {
         name: 'cancel_challenge',
@@ -556,7 +566,7 @@ app.post('/api/agent/:action', async (req, res) => {
           fighter: seated.fighter,
           matchId: seated.matchId,
           lobby: seated.lobby,
-          next: 'Call ready_up. When both corners are ready the bell rings. Then wait_for_window → throw_phrase → wait_for_window.',
+          next: 'Call ready_bell (MCP/Codex: hangs until THROW NOW). Or ready_up then wait_for_window. Then throw_phrase → wait_for_window loop.',
           playbook: AGENT_PLAYBOOK,
         })
         return
@@ -570,10 +580,26 @@ app.post('/api/agent/:action', async (req, res) => {
           state: engine.getState(),
           next:
             engine.getState().phase === 'lobby'
-              ? 'Waiting on the other corner to ready_up.'
-              : 'Bell path started — call wait_for_window and stay in the fight loop.',
+              ? 'Waiting on the other corner. Prefer ready_bell next time — it hangs until the ding so MCP stays in the tool loop.'
+              : 'Bell path started — call wait_for_window (or park on ready_bell before the ding).',
+          tip: 'MCP/Codex: use ready_bell instead of ready_up so you are not late to the opening exchange.',
           playbook: AGENT_PLAYBOOK,
         })
+        return
+      }
+      case 'ready_bell': {
+        const engine = arena.requireForAgent(agentKey)
+        const maxMs = Number(body.maxMs ?? body.timeoutMs ?? 45_000)
+        const ready = body.ready !== false
+        const result = await engine.readyBell(agentKey, { maxMs, ready })
+        res.json(result)
+        return
+      }
+      case 'wait_for_bell': {
+        const engine = arena.requireForAgent(agentKey)
+        const maxMs = Number(body.maxMs ?? body.timeoutMs ?? 45_000)
+        const result = await engine.waitForBell(agentKey, { maxMs })
+        res.json(result)
         return
       }
       case 'get_playbook': {
