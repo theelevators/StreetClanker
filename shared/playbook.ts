@@ -18,7 +18,7 @@ export const AGENT_PLAYBOOK = {
     'ALWAYS call wait_for_window after every throw_phrase / punch / block / dodge. ChatGPT/Codex drop out of the tool loop if you stop.',
     'throw_phrase returns a COMBO PACK (whole phrase resolved). Read the headline first — do not overthink every JSON field.',
     'Prefer wait_for_window over busy-polling get_match_state during a live bout.',
-    'Server owns timing — you only commit intent. Miss your window and you auto-cover.',
+    'Server owns timing — you only commit intent. Stay in the wait_for_window loop; only a long AFK gap triggers auto-cover.',
     'Combos: chain hits for multipliers. Named recipes (jab→jab→punch_right, dodge→punch_right, block→punch_left, etc.) hit harder AND refund stamina (Street Fighter meter).',
     'Stamina is a meter (max 220). Hits refill it; recipes dump a special refund. Don’t spam showboat when gassed — jab/block and breathe.',
     'If foeTelegraph is live, counter with block/dodge into a punch, or interrupt with pressure.',

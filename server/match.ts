@@ -43,6 +43,15 @@ const COVER_MS = 900
 const BEAT_GAP_MS = 300
 const TELEGRAPH_MS = 200
 const PHRASE_RECOVERY_MS = 420
+/**
+ * Auto-cover used to fire ~1.2s after a missed window. That is far too tight
+ * for LLM tool loops (wait → think → throw often takes several seconds), so
+ * agents turtled constantly and their opponent's punches "missed" into cover.
+ * Only AFK corners should turtle now.
+ */
+const MISS_COVER_AFTER_MS = 16_000
+/** Skip auto-cover while the agent is mid tool-loop (recent throw / wake). */
+const AGENT_LOOP_GRACE_MS = 12_000
 
 const MOVE_COST: Record<PhraseMove, number> = {
   jab: 4,
@@ -192,6 +201,8 @@ export class MatchEngine {
   private onChat: (message: ChatMessage) => void
   /** Latch so auto-cover fires once per missed window */
   private coverLatch: Record<Corner, number> = { red: 0, blue: 0 }
+  /** Last agent tool activity per corner — suppresses AFK auto-cover. */
+  private lastAgentTouch: Record<Corner, number> = { red: 0, blue: 0 }
   private lastHeatTick = 0
   /** Street-fighter combo trails — resets on whiff, block, or getting hit. */
   private comboTrail: Record<Corner, ComboTrail> = {
@@ -455,6 +466,7 @@ export class MatchEngine {
     this.coachAdvice = { red: [], blue: [] }
     this.agentKeys = {}
     this.coverLatch = { red: 0, blue: 0 }
+    this.lastAgentTouch = { red: 0, blue: 0 }
     this.resetCombos()
     this.state = this.createLobby()
     this.pushChat({
@@ -479,6 +491,7 @@ export class MatchEngine {
     this.clearTimers()
     this.coachAdvice = { red: [], blue: [] }
     this.coverLatch = { red: 0, blue: 0 }
+    this.lastAgentTouch = { red: 0, blue: 0 }
     this.resetCombos()
     this.scoredMatchId = null
     this.state = this.createLobby()
@@ -529,6 +542,7 @@ export class MatchEngine {
     this.clearTimers()
     this.coachAdvice = { red: [], blue: [] }
     this.coverLatch = { red: 0, blue: 0 }
+    this.lastAgentTouch = { red: 0, blue: 0 }
     this.resetCombos()
     this.scoredMatchId = null
     this.agentKeys = {}
@@ -708,6 +722,7 @@ export class MatchEngine {
       f.guard = 0
     }
     this.coverLatch = { red: 0, blue: 0 }
+    this.lastAgentTouch = { red: 0, blue: 0 }
     this.resetCombos()
     this.pushEvent(`Round ${this.state.round} — lights, camera, leather`)
     this.emit()
@@ -856,8 +871,9 @@ export class MatchEngine {
     if (this.hasActivePhrase(corner)) {
       throw new Error('Phrase already in the air — finish the combo')
     }
+    // Agents can punch out of auto-cover / brief gloves-up — don't soft-lock the tool loop.
     if (self.covering) {
-      throw new Error('Still covering — gloves are glued')
+      self.covering = false
     }
     if (self.nextWindowAt && t + WINDOW_GRACE_MS < self.nextWindowAt) {
       throw new Error(
@@ -889,6 +905,7 @@ export class MatchEngine {
     self.nextWindowAt = phrase.endsAt + PHRASE_RECOVERY_MS
     self.covering = false
     this.coverLatch[corner] = 0
+    this.touchAgent(corner)
     this.state.cardHeat = clamp(this.state.cardHeat + 2 + beats.length, 0, 100)
 
     const telegraph = beats.map((b) => b.move).join(' → ')
@@ -1139,6 +1156,14 @@ export class MatchEngine {
     this.state[corner].comboLabel = trail.label
   }
 
+  private touchAgent(corner: Corner) {
+    this.lastAgentTouch[corner] = Date.now()
+  }
+
+  private agentHasWindowWaiter(corner: Corner) {
+    return this.windowWaiters.some((w) => this.cornerForAgent(w.agentKey) === corner)
+  }
+
   private autoCover(corner: Corner, reason: string) {
     const f = this.state[corner]
     if (f.covering || this.hasActivePhrase(corner)) return
@@ -1159,7 +1184,7 @@ export class MatchEngine {
   }
 
   /**
-   * Heartbeat (~50ms): resolve due phrase beats, missed-window auto-cover,
+   * Heartbeat (~50ms): resolve due phrase beats, AFK auto-cover,
    * soft stamina regen, card heat cool-off.
    */
   tick() {
@@ -1201,15 +1226,19 @@ export class MatchEngine {
     this.state.activePhrases = stillActive
     if (this.state.activePhrases.length !== beforeLen) dirty = true
 
-    // Missed window → auto-cover (agents only — Vegas survival instinct)
+    // AFK only → auto-cover. LLM tool loops routinely take several seconds
+    // between wait_for_window and throw_phrase; the old ~1.2s band made every
+    // live agent turtle, which also nullified the other corner's punches.
     for (const c of ['red', 'blue'] as Corner[]) {
       const key = this.agentKeys[c]
       if (!key || key.startsWith('demo-')) continue
       const f = this.state[c]
       if (!f.nextWindowAt || this.hasActivePhrase(c) || f.covering) continue
+      if (this.agentHasWindowWaiter(c)) continue
+      if (t - this.lastAgentTouch[c] < AGENT_LOOP_GRACE_MS) continue
       const overdue = t - f.nextWindowAt
-      if (overdue > 1200 && overdue < 2200 && this.coverLatch[c] < f.nextWindowAt) {
-        this.autoCover(c, 'missed exchange window')
+      if (overdue > MISS_COVER_AFTER_MS && this.coverLatch[c] < f.nextWindowAt) {
+        this.autoCover(c, 'AFK — missed exchange window')
         dirty = true
       }
     }
@@ -1458,6 +1487,7 @@ export class MatchEngine {
     if (!corner) {
       return Promise.reject(new Error('Claim a corner first'))
     }
+    this.touchAgent(corner)
     const maxMs = Math.min(Math.max(opts.maxMs ?? 12_000, 250), 45_000)
     const snap = this.agentWakeSnapshot(agentKey, 'window_open')
     if (snap.shouldWake) {
@@ -1467,12 +1497,14 @@ export class MatchEngine {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.windowWaiters = this.windowWaiters.filter((w) => w.timer !== timer)
+        this.touchAgent(corner)
         resolve(this.agentWakeSnapshot(agentKey, 'timeout').payload)
       }, maxMs)
       this.windowWaiters.push({
         agentKey,
         resolve: (value) => {
           clearTimeout(timer)
+          this.touchAgent(corner)
           resolve(value)
         },
         timer,
@@ -1592,6 +1624,9 @@ export class MatchEngine {
     const beforeStamina = this.state[corner].stamina
     const committed = this.throwPhrase(corner, input)
     await this.waitForPhrase(committed.phrase.id)
+    // Pack return is another tool boundary — give the agent think-time before
+    // AFK auto-cover can fire on the next open window.
+    this.touchAgent(corner)
     const pack = this.buildComboPack(corner, committed, beforeStamina)
     // Auto-attach a slim next-window snapshot when the window is already open
     // so GPT can sometimes skip an extra wait_for_window round-trip.

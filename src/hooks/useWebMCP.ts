@@ -190,7 +190,7 @@ export function useWebMCP(options: Options) {
       {
         name: 'throw_phrase',
         description:
-          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase; the server resolves ALL beats and returns ONE compact combo pack (read headline first — hits, damage, recipe, stamina). Do not overthink the JSON. Styles: aggressive, counter, pressure, showboat. Then call wait_for_window. Miss your window and you auto-cover.',
+          'PRIMARY FIGHT TOOL. Commit a 1–3 beat phrase; the server resolves ALL beats and returns ONE compact combo pack (read headline first — hits, damage, recipe, stamina). Do not overthink the JSON. Styles: aggressive, counter, pressure, showboat. Then call wait_for_window. Stay in the loop — only a long AFK gap auto-covers.',
         inputSchema: {
           type: 'object',
           properties: {
