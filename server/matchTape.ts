@@ -7,7 +7,8 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { BoutResult, Corner } from '../shared/types.ts'
+import type { BoutResult, Corner, MatchState } from '../shared/types.ts'
+import { slimMatchState, type ReplayFrame } from '../shared/replay.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '../data/bouts')
@@ -42,14 +43,17 @@ export type MatchTape = {
   red: { id: string | null; name: string } | null
   blue: { id: string | null; name: string } | null
   events: MatchTapeEvent[]
+  /** Visual ring film — MatchState snapshots for TV rematch. */
+  frames: ReplayFrame[]
   result: BoutResult | null
 }
 
 const MAX_EVENTS = 800
+const MAX_FRAMES = 1800
 const MAX_DISK_BOUTS = 80
 
 /**
- * Per-ring event tape for replay — tool calls, claims, impacts, lobby A2A.
+ * Per-ring event tape + visual frame film for replay.
  * Live rings keep an in-memory tape; finished bouts flush to data/bouts/.
  */
 export class MatchTapeStore {
@@ -65,13 +69,22 @@ export class MatchTapeStore {
       red: null,
       blue: null,
       events: [],
+      frames: [],
       result: null,
     }
     this.live.set(matchId, tape)
     return tape
   }
 
-  /** Re-key when rematch allocates a new match id. */
+  /**
+   * Drop a live tape after it was persisted (e.g. rematch on a fresh canvas).
+   * Disk copy stays so the finished bout remains on the shelf.
+   */
+  releaseLive(matchId: string) {
+    this.live.delete(matchId)
+  }
+
+  /** Re-key when rematch allocates a new match id — prefer releaseLive + start for rematch. */
   rekey(oldId: string, newId: string) {
     if (oldId === newId) return
     const tape = this.live.get(oldId)
@@ -102,6 +115,21 @@ export class MatchTapeStore {
     return tape
   }
 
+  /** Snapshot the ring for TV rematch — throttled by the engine. */
+  captureFrame(matchId: string, state: MatchState, at = Date.now()) {
+    const tape = this.live.get(matchId) ?? this.start(matchId)
+    tape.frames.push({
+      at,
+      state: slimMatchState(state),
+    })
+    if (tape.frames.length > MAX_FRAMES) {
+      // Keep ends + drop early lobby padding first
+      const drop = tape.frames.length - MAX_FRAMES
+      tape.frames = tape.frames.slice(drop)
+    }
+    return tape
+  }
+
   setCorner(
     matchId: string,
     corner: Corner,
@@ -124,6 +152,7 @@ export class MatchTapeStore {
         winner: result.winner,
         method: result.method,
         cardHeat: result.cardHeat,
+        frameCount: tape.frames.length,
       },
     })
     this.persist(tape)
@@ -131,7 +160,9 @@ export class MatchTapeStore {
   }
 
   get(matchId: string): MatchTape | null {
-    return this.live.get(matchId) ?? this.loadDisk(matchId)
+    const live = this.live.get(matchId)
+    if (live) return this.normalize(live)
+    return this.loadDisk(matchId)
   }
 
   /** Compact agent-facing summary — not the full raw dump. */
@@ -147,6 +178,8 @@ export class MatchTapeStore {
       red: tape.red,
       blue: tape.blue,
       eventCount: tape.events.length,
+      frameCount: tape.frames.length,
+      hasFilm: tape.frames.length > 0,
       recent: events.map((e) => ({
         at: e.at,
         kind: e.kind,
@@ -172,11 +205,14 @@ export class MatchTapeStore {
       winner: BoutResult['winner'] | null
       method: BoutResult['method'] | null
       eventCount: number
+      frameCount: number
+      hasFilm: boolean
       live: boolean
       replayPath: string
     }> = []
 
     for (const tape of this.live.values()) {
+      const frames = tape.frames?.length ?? 0
       cards.push({
         matchId: tape.matchId,
         startedAt: tape.startedAt,
@@ -186,6 +222,8 @@ export class MatchTapeStore {
         winner: tape.result?.winner ?? null,
         method: tape.result?.method ?? null,
         eventCount: tape.events.length,
+        frameCount: frames,
+        hasFilm: frames > 0,
         live: !tape.endedAt,
         replayPath: `/api/bout/${tape.matchId}/tape`,
       })
@@ -199,6 +237,7 @@ export class MatchTapeStore {
         if (this.live.has(id)) continue
         const tape = this.loadDisk(id)
         if (!tape) continue
+        const frames = tape.frames?.length ?? 0
         cards.push({
           matchId: tape.matchId,
           startedAt: tape.startedAt,
@@ -208,6 +247,8 @@ export class MatchTapeStore {
           winner: tape.result?.winner ?? null,
           method: tape.result?.method ?? null,
           eventCount: tape.events.length,
+          frameCount: frames,
+          hasFilm: frames > 0,
           live: false,
           replayPath: `/api/bout/${tape.matchId}/tape`,
         })
@@ -219,6 +260,11 @@ export class MatchTapeStore {
     return cards
       .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt))
       .slice(0, Math.max(1, Math.min(limit, 60)))
+  }
+
+  private normalize(tape: MatchTape): MatchTape {
+    if (!Array.isArray(tape.frames)) tape.frames = []
+    return tape
   }
 
   private persist(tape: MatchTape) {
@@ -234,7 +280,8 @@ export class MatchTapeStore {
   private loadDisk(matchId: string): MatchTape | null {
     try {
       const raw = readFileSync(path.join(DATA_DIR, `${matchId}.json`), 'utf8')
-      return JSON.parse(raw) as MatchTape
+      const tape = JSON.parse(raw) as MatchTape
+      return this.normalize(tape)
     } catch {
       return null
     }

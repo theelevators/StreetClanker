@@ -227,6 +227,10 @@ export class MatchEngine {
   private agentSubs = new Set<(event: AgentRingEvent) => void>()
   /** Last window-open latch per corner — edge-trigger wakeups. */
   private windowOpenLatch: Record<Corner, boolean> = { red: false, blue: false }
+  /** Throttle for visual rematch film frames. */
+  private lastReplayFrameAt = 0
+  private lastReplayPhase: MatchState['phase'] | null = null
+  private lastReplayImpactId: string | null = null
 
   constructor(
     onChange: (state: MatchState) => void,
@@ -422,6 +426,31 @@ export class MatchEngine {
   private emit() {
     this.onChange(this.state)
     this.flushAgentWakeups()
+    this.maybeCaptureReplayFrame()
+  }
+
+  /** Record ring film so humans can rewatch the bout on Arena later. */
+  private maybeCaptureReplayFrame() {
+    const now = Date.now()
+    const phase = this.state.phase
+    const impactId = this.state.lastImpact?.id ?? null
+    const phaseChanged = phase !== this.lastReplayPhase
+    const impactChanged = impactId !== null && impactId !== this.lastReplayImpactId
+
+    let gap = 450
+    if (phase === 'fighting') gap = 85
+    else if (phase === 'countdown' || phase === 'between_rounds') gap = 160
+    else if (phase === 'knockout' || phase === 'decision' || phase === 'ended') gap = 220
+    else if (phase === 'lobby') gap = 900
+
+    if (!phaseChanged && !impactChanged && now - this.lastReplayFrameAt < gap) {
+      return
+    }
+
+    this.lastReplayFrameAt = now
+    this.lastReplayPhase = phase
+    this.lastReplayImpactId = impactId
+    matchTape.captureFrame(this.state.id, this.state, now)
   }
 
   private pushEvent(text: string) {
@@ -528,8 +557,13 @@ export class MatchEngine {
     this.resetCombos()
     this.scoredMatchId = null
     this.state = this.createLobby()
-    matchTape.rekey(priorMatchId, this.state.id)
-    matchTape.append(this.state.id, { kind: 'phase', detail: { note: 'rematch' } })
+    // Keep finished bout film on disk; start a fresh tape for the rematch card.
+    matchTape.releaseLive(priorMatchId)
+    matchTape.start(this.state.id)
+    matchTape.append(this.state.id, { kind: 'phase', detail: { note: 'rematch', from: priorMatchId } })
+    this.lastReplayFrameAt = 0
+    this.lastReplayPhase = null
+    this.lastReplayImpactId = null
     this.agentKeys = { red: redKey, blue: blueKey }
     this.joinAgent(redKey, 'red', redName)
     this.joinAgent(blueKey, 'blue', blueName)

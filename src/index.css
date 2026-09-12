@@ -2560,13 +2560,14 @@ code {
   word-break: break-all;
 }
 
-/* —— Replay shelf —— */
+/* —— Replay shelf / TV rematch —— */
 .replay-shelf {
   margin: 2.5rem 0 0;
   padding: 1.4rem 1.35rem 1.5rem;
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   background:
-    linear-gradient(200deg, color-mix(in srgb, #2a6 8%, transparent), transparent 40%),
+    linear-gradient(200deg, color-mix(in srgb, #c45 10%, transparent), transparent 42%),
+    linear-gradient(160deg, color-mix(in srgb, #1a3a4a 18%, transparent), transparent 50%),
     color-mix(in srgb, var(--panel) 92%, #000);
 }
 .replay-shelf-head h2 {
@@ -2621,25 +2622,72 @@ code {
   margin: 0.75rem 0 0;
   opacity: 0.7;
 }
-.replay-viewer {
+.replay-viewer,
+.replay-theater {
   margin-top: 1.1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--line);
 }
+.replay-theater-head,
 .replay-viewer-head {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
   align-items: baseline;
 }
+.replay-theater-head h3,
 .replay-viewer-head h3 {
-  margin: 0;
+  margin: 0.2rem 0 0;
   font-family: var(--display);
   font-size: 1.15rem;
+}
+.replay-broadcast-tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, #e8b45a 85%, #fff);
+  opacity: 0.9;
+  animation: replay-pulse 1.8s ease-in-out infinite;
+}
+@keyframes replay-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 .replay-id {
   font-size: 0.75rem;
   opacity: 0.55;
+}
+.replay-tv {
+  margin-top: 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--line) 90%, #000);
+  background: #0c0907;
+  overflow: hidden;
+  aspect-ratio: 16 / 10;
+  max-height: min(70vh, 640px);
+  position: relative;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, #fff 4%, transparent),
+    0 18px 40px color-mix(in srgb, #000 45%, transparent);
+}
+.replay-tv-stage {
+  position: absolute !important;
+  inset: 0;
+  height: 100% !important;
+  width: 100% !important;
+}
+.replay-tv-stage .ring-stage,
+.replay-tv-stage .arena-canvas,
+.replay-tv-stage .ring-overlay {
+  height: 100%;
+}
+.replay-tv-stage .ring-chrome {
+  pointer-events: none;
 }
 .replay-controls {
   display: flex;
@@ -2647,6 +2695,14 @@ code {
   gap: 0.45rem;
   align-items: center;
   margin: 0.85rem 0;
+}
+.replay-speeds {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+.replay-speeds .ghost.active {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--line));
+  color: #fff;
 }
 .replay-scrub {
   flex: 1 1 12rem;
@@ -2692,6 +2748,13 @@ code {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   opacity: 0.65;
+}
+
+@media (max-width: 720px) {
+  .replay-tv {
+    aspect-ratio: 4 / 5;
+    max-height: min(78vh, 560px);
+  }
 }
 .ring-agent {
   margin-right: 0.55rem;
