@@ -22,6 +22,7 @@ import {
   COMBO_RECIPES,
   COMBO_WINDOW_MS,
   evaluateCombo,
+  finiteStat,
   MAX_HEALTH,
   MAX_STAMINA,
   STAMINA_BETWEEN_ROUNDS,
@@ -162,6 +163,36 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n))
 }
 
+/** Card-scaled ceilings for a bout. Always finite and ≥ 1. */
+function cardVitals(cardId: BenchCardId) {
+  const card = BENCH_CARDS[cardId]
+  const hpScale = card?.mods?.healthScale ?? 1
+  const stmScale = card?.mods?.staminaScale ?? 1
+  return {
+    maxHp: Math.max(1, Math.round(MAX_HEALTH * finiteStat(hpScale, 1))),
+    maxStm: Math.max(1, Math.round(MAX_STAMINA * finiteStat(stmScale, 1))),
+    hpScale: finiteStat(hpScale, 1),
+    stmScale: finiteStat(stmScale, 1),
+  }
+}
+
+/** Fresh canvas for a corner — wipes KO'd / NaN leftover meters from the last bout. */
+function laceFighter(fighter: FighterPublic, maxHp: number, maxStm: number) {
+  fighter.maxHealth = maxHp
+  fighter.health = maxHp
+  fighter.maxStamina = maxStm
+  fighter.stamina = maxStm
+  fighter.knockedOut = false
+  fighter.guard = 0
+  fighter.covering = false
+  fighter.ready = false
+  fighter.lastAction = null
+  fighter.lastActionAt = null
+  fighter.nextWindowAt = null
+  fighter.comboCount = 0
+  fighter.comboLabel = null
+}
+
 function isAttack(move: PhraseMove): move is FightAction {
   return move === 'jab' || move === 'punch_left' || move === 'punch_right'
 }
@@ -278,6 +309,15 @@ export class MatchEngine {
 
   getCardId(): BenchCardId {
     return this.cardId
+  }
+
+  /** Full meters, no KO — used on rematch, join, and the opening bell. */
+  private laceCorners() {
+    const vitals = cardVitals(this.cardId)
+    for (const c of ['red', 'blue'] as Corner[]) {
+      laceFighter(this.state[c], vitals.maxHp, vitals.maxStm)
+    }
+    return vitals
   }
 
   /** Pick a named bench card before the bell — same ring, different experiment lens. */
@@ -584,12 +624,13 @@ export class MatchEngine {
       throw new Error('Need both named fighters still in the corners for a rematch')
     }
     this.clearTimers()
+    this.flushAllPhraseWaiters()
     this.coachAdvice = { red: [], blue: [] }
     this.coverLatch = { red: 0, blue: 0 }
     this.lastAgentTouch = { red: 0, blue: 0 }
-    this.resetCombos()
     this.scoredMatchId = null
     this.state = this.createLobby()
+    this.resetCombos()
     // Keep finished bout film on disk; start a fresh tape for the rematch card.
     matchTape.releaseLive(priorMatchId)
     matchTape.start(this.state.id, this.cardId)
@@ -603,6 +644,10 @@ export class MatchEngine {
     this.agentKeys = { red: redKey, blue: blueKey }
     this.joinAgent(redKey, 'red', redName)
     this.joinAgent(blueKey, 'blue', blueName)
+    // joinAgent reseats identity; lace both corners so a KO'd loser cannot
+    // keep 0 / undefined / NaN HP into the next card (that bar shows NaN
+    // and NaN HP never loses to `health <= 0`).
+    this.laceCorners()
     this.pushChat({
       from: 'system',
       name: 'Ring Announcer',
@@ -748,6 +793,8 @@ export class MatchEngine {
     }
     this.agentKeys[corner] = agentKey
     const fighter = this.state[corner]
+    const { maxHp, maxStm } = cardVitals(this.cardId)
+    laceFighter(fighter, maxHp, maxStm)
     const card = fighterStore.getOrCreate(agentKey, name)
     fighter.id = agentKey
     fighter.name = card.name
@@ -883,17 +930,7 @@ export class MatchEngine {
     }
     this.state.round = 1
     this.state.winner = null
-    const card = BENCH_CARDS[this.cardId]
-    const hpScale = card.mods?.healthScale ?? 1
-    const stmScale = card.mods?.staminaScale ?? 1
-    const maxHp = Math.max(1, Math.round(MAX_HEALTH * hpScale))
-    const maxStm = Math.max(1, Math.round(MAX_STAMINA * stmScale))
-    for (const c of ['red', 'blue'] as Corner[]) {
-      this.state[c].maxHealth = maxHp
-      this.state[c].health = maxHp
-      this.state[c].maxStamina = maxStm
-      this.state[c].stamina = maxStm
-    }
+    const { maxHp, maxStm, hpScale, stmScale } = this.laceCorners()
     matchTape.setCard(this.state.id, this.cardId)
     matchTape.append(this.state.id, {
       kind: 'phase',
@@ -906,10 +943,6 @@ export class MatchEngine {
         maxStm,
       },
     })
-    this.state.red.knockedOut = false
-    this.state.blue.knockedOut = false
-    this.state.red.ready = false
-    this.state.blue.ready = false
     this.state.activePhrases = []
     this.state.cardHeat = clamp(this.state.cardHeat + 8, 0, 100)
     crowdStore.lockBook(this.state.id)
@@ -1299,8 +1332,12 @@ export class MatchEngine {
     }
 
     if (result !== 'dodged') {
-      defender.health = Math.max(0, defender.health - damage)
-      defender.guard = Math.max(0, defender.guard - 8)
+      const maxHp = Math.max(1, finiteStat(defender.maxHealth, MAX_HEALTH))
+      defender.maxHealth = maxHp
+      const hp = finiteStat(defender.health, maxHp)
+      const hit = finiteStat(damage, 0)
+      defender.health = Math.max(0, hp - hit)
+      defender.guard = Math.max(0, finiteStat(defender.guard, 0) - 8)
     }
 
     const impact: ImpactEvent = {
@@ -1425,8 +1462,10 @@ export class MatchEngine {
     for (const c of ['red', 'blue'] as Corner[]) {
       const f = this.state[c]
       if (!this.hasActivePhrase(c) && !f.covering) {
-        const before = f.stamina
-        f.stamina = Math.min(f.maxStamina, f.stamina + 0.32)
+        const maxStm = Math.max(1, finiteStat(f.maxStamina, MAX_STAMINA))
+        f.maxStamina = maxStm
+        const before = finiteStat(f.stamina, maxStm)
+        f.stamina = Math.min(maxStm, before + 0.32)
         if (f.stamina !== before) dirty = true
       }
     }

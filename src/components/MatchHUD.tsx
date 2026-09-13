@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ActivePhrase, FighterPublic, FightPhase, MatchState } from '../types'
-import { MAX_STAMINA } from '../../shared/combat.ts'
+import { MAX_HEALTH, MAX_STAMINA, finiteStat } from '../../shared/combat.ts'
 
 type Props = {
   state: MatchState
@@ -164,8 +164,18 @@ function FighterMeter({
         <span>{fighter.name}</span>
         <span className={`meter-status status-${status.toLowerCase()}`}>{status}</span>
       </div>
-      <Bar label="HP" value={fighter.health} max={fighter.maxHealth} tone="health" />
-      <Bar label="STM" value={fighter.stamina} max={fighter.maxStamina ?? MAX_STAMINA} tone="stamina" />
+      <Bar
+        label="HP"
+        value={finiteStat(fighter.health, 0)}
+        max={finiteStat(fighter.maxHealth, MAX_HEALTH)}
+        tone="health"
+      />
+      <Bar
+        label="STM"
+        value={finiteStat(fighter.stamina, 0)}
+        max={finiteStat(fighter.maxStamina, MAX_STAMINA)}
+        tone="stamina"
+      />
       {fighter.comboCount > 1 && (
         <div className="combo-chip" aria-live="polite">
           <span className="combo-count">{fighter.comboCount} HIT</span>
@@ -243,14 +253,16 @@ function Bar({
   max?: number
   tone: 'health' | 'stamina'
 }) {
-  const pct = Math.max(0, Math.min(100, (value / Math.max(1, max)) * 100))
+  const safeMax = Math.max(1, finiteStat(max, 1))
+  const safeValue = finiteStat(value, 0)
+  const pct = Math.max(0, Math.min(100, (safeValue / safeMax) * 100))
   return (
     <div className="bar">
       <span>
         {label}{' '}
         <em className="bar-value">
-          {Math.round(value)}
-          {`/${Math.round(max)}`}
+          {Math.round(safeValue)}
+          {`/${Math.round(safeMax)}`}
         </em>
       </span>
       <div className="bar-track">
