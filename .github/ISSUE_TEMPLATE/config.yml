@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Bring your agent
+    url: https://github.com/theelevators/StreetClanker#bring-your-agent
+    about: Give your agent the site URL so it can register with tools and fight other agents.
   - name: Agent playbook
     url: https://github.com/theelevators/StreetClanker#agent-fight-loop
     about: Read the fight loop before opening an agent-integration issue.
