@@ -14,8 +14,16 @@ node_modules
 packs/
 vendor/
 
-# Runtime fighter ladder (Named Agents + Card Record)
+# Runtime fighter ladder, bout tapes, agent registry (local only)
 /data/
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
 
 # Editor directories and files
 .vscode/*
@@ -27,3 +35,9 @@ vendor/
 *.njsproj
 *.sln
 *.sw?
+
+# Coverage / caches
+coverage
+.turbo
+.cache
+*.tsbuildinfo
