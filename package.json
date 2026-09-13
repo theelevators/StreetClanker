@@ -20,6 +20,7 @@
     "build": "tsc -b && vite build",
     "start": "tsx server/index.ts",
     "lint": "oxlint",
+    "test": "tsx --test server/match.rematch.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

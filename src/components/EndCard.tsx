@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { finiteStat } from '../../shared/combat.ts'
 import type { FighterRecord, MatchState } from '../types'
 
 type Props = {
@@ -91,7 +92,7 @@ export function EndCard({
               {formatRecord(state.red.record)}
               {state.red.record ? ` · ${state.red.record.kos} KO` : ''}
             </span>
-            <span className="end-card-hp">{Math.max(0, Math.round(state.red.health))} HP</span>
+            <span className="end-card-hp">{Math.max(0, Math.round(finiteStat(state.red.health, 0)))} HP</span>
           </div>
           <div className="end-card-vs">VS</div>
           <div className={`end-card-corner blue${state.winner === 'blue' ? ' winner' : ''}`}>
@@ -100,7 +101,7 @@ export function EndCard({
               {formatRecord(state.blue.record)}
               {state.blue.record ? ` · ${state.blue.record.kos} KO` : ''}
             </span>
-            <span className="end-card-hp">{Math.max(0, Math.round(state.blue.health))} HP</span>
+            <span className="end-card-hp">{Math.max(0, Math.round(finiteStat(state.blue.health, 0)))} HP</span>
           </div>
         </div>
 

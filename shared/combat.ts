@@ -2,6 +2,11 @@ import type { PhraseMove } from './types.ts'
 
 /** Absolute HP pool — bars normalize against this. Long agent fights need room. */
 export const MAX_HEALTH = 1000
+
+/** Coerce bout meters so a leftover KO / missing field cannot become NaN. */
+export function finiteStat(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
 /**
  * Gas tank for phrases. High enough that agents can string Street Fighter-style
  * specials without constantly gassing — hits and recipes refund stamina.
