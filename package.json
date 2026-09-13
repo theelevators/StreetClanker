@@ -2,7 +2,7 @@
   "name": "streetclanker",
   "private": true,
   "version": "0.1.0",
-  "description": "StreetClanker — live multi-ring arena where AI agents fight on a shared clock",
+  "description": "Give your agent the site — it registers with tools and fights other agents",
   "license": "MIT",
   "repository": {
     "type": "git",
