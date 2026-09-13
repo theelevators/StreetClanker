@@ -41,24 +41,29 @@ export type ArenaBroadcast =
 
 const MAX_LIVE = 48
 const MAX_HISTORY = 120
-const MAX_DEMO = 2
+/** Single reserved house exhibition — does not consume paid arena slots. */
+const MAX_DEMO = 1
 const ENDED_GRACE_MS = 8 * 60_000
 const IDLE_LOBBY_MS = 30 * 60_000
 
 /**
  * Process-level registry of concurrent MatchEngine rings.
  * Walk-up claims join an open lobby; challenge accepts spawn a fresh ring.
+ * Demo is a reserved house slot outside the paid live capacity.
  */
 export class MatchArena {
   private live = new Map<string, ArenaSlot>()
   private byAgent = new Map<string, string>()
   private history = new Map<string, BoutResult>()
   private openLobbyId: string | null = null
+  /** Reserved exhibition ring — always available, never counts toward MAX_LIVE. */
+  private houseDemoId: string | null = null
   private onBroadcast: (msg: ArenaBroadcast) => void
 
   constructor(onBroadcast: (msg: ArenaBroadcast) => void) {
     this.onBroadcast = onBroadcast
     this.ensureOpenLobby()
+    this.ensureHouseDemo()
   }
 
   private touch(slot: ArenaSlot) {
@@ -79,9 +84,23 @@ export class MatchArena {
     this.live.delete(oldId)
     this.live.set(newId, slot)
     if (this.openLobbyId === oldId) this.openLobbyId = newId
+    if (this.houseDemoId === oldId) this.houseDemoId = newId
     for (const [agent, mid] of this.byAgent) {
       if (mid === oldId) this.byAgent.set(agent, newId)
     }
+  }
+
+  /** Paid rings only — house demo is reserved and excluded from capacity. */
+  private paidLiveCount() {
+    return [...this.live.values()].filter((s) => s.kind !== 'demo').length
+  }
+
+  private isActiveFight(phase: MatchState['phase']) {
+    return (
+      phase === 'countdown' ||
+      phase === 'fighting' ||
+      phase === 'between_rounds'
+    )
   }
 
   private syncAgentIndex(slot: ArenaSlot) {
@@ -148,6 +167,7 @@ export class MatchArena {
 
       if (!idleLobby && !staleEnded) continue
       if (id === this.openLobbyId) continue
+      if (id === this.houseDemoId) continue
 
       for (const [agent, mid] of [...this.byAgent]) {
         if (mid === id) this.byAgent.delete(agent)
@@ -159,7 +179,7 @@ export class MatchArena {
 
   private capacityCheck() {
     this.sweepRetired()
-    if (this.live.size >= MAX_LIVE) {
+    if (this.paidLiveCount() >= MAX_LIVE) {
       throw new Error(`Arena full (${MAX_LIVE} live rings) — try again in a minute`)
     }
   }
@@ -180,15 +200,36 @@ export class MatchArena {
   }
 
   createMatch(kind: RingKind = 'challenge'): MatchEngine {
-    this.capacityCheck()
     if (kind === 'demo') {
-      const demos = [...this.live.values()].filter((s) => s.kind === 'demo')
-      if (demos.length >= MAX_DEMO) {
-        demos.sort((a, b) => a.createdAt - b.createdAt)
-        return demos[0]!.engine
-      }
+      return this.ensureHouseDemo()
     }
+    this.capacityCheck()
     return this.attachEngine(kind)
+  }
+
+  /**
+   * Reserved house exhibition ring. Does not consume a paid arena slot.
+   * Created once and kept alive across watchers.
+   */
+  ensureHouseDemo(): MatchEngine {
+    if (this.houseDemoId) {
+      const slot = this.live.get(this.houseDemoId)
+      if (slot && slot.kind === 'demo') return slot.engine
+      this.houseDemoId = null
+    }
+    // Sweep stray demos from older builds, then attach exactly one reserved ring.
+    for (const [id, slot] of [...this.live]) {
+      if (slot.kind !== 'demo') continue
+      for (const [agent, mid] of [...this.byAgent]) {
+        if (mid === id) this.byAgent.delete(agent)
+      }
+      slot.engine.destroy()
+      this.live.delete(id)
+    }
+    this.sweepRetired()
+    const engine = this.attachEngine('demo')
+    this.houseDemoId = engine.getState().id
+    return engine
   }
 
   get(matchId: string | null | undefined): MatchEngine | null {
@@ -226,14 +267,17 @@ export class MatchArena {
     corner: Corner,
     name: string,
     matchId?: string | null,
+    opts: { cardId?: string | null } = {},
   ) {
     const existing = this.resolveForAgent(agentKey)
     if (existing) {
+      if (opts.cardId) existing.setCard(opts.cardId)
       const fighter = existing.joinAgent(agentKey, corner, name)
       this.byAgent.set(agentKey, existing.getState().id)
       return {
         fighter,
         matchId: existing.getState().id,
+        cardId: existing.getCardId(),
         lobby: existing.lobbyStatus(),
       }
     }
@@ -256,6 +300,7 @@ export class MatchArena {
       }
     }
 
+    if (opts.cardId) engine.setCard(opts.cardId)
     const fighter = engine.joinAgent(agentKey, seatCorner, name)
     const id = engine.getState().id
     this.byAgent.set(agentKey, id)
@@ -266,7 +311,7 @@ export class MatchArena {
       this.ensureOpenLobby()
     }
 
-    return { fighter, matchId: id, lobby: engine.lobbyStatus() }
+    return { fighter, matchId: id, cardId: engine.getCardId(), lobby: engine.lobbyStatus() }
   }
 
 
@@ -304,7 +349,7 @@ export class MatchArena {
     agentKey: string,
     corner: Corner,
     name: string,
-    opts: { matchId?: string | null; leaveCurrent?: boolean } = {},
+    opts: { matchId?: string | null; leaveCurrent?: boolean; cardId?: string | null } = {},
   ) {
     const seated = this.resolveForAgent(agentKey)
     if (seated) {
@@ -319,13 +364,15 @@ export class MatchArena {
       } else if (!opts.matchId) {
         // Already seated — refresh seat / rename
         return {
-          ...this.claimCorner(agentKey, corner, name, currentId),
+          ...this.claimCorner(agentKey, corner, name, currentId, { cardId: opts.cardId }),
           alreadySeated: true as const,
           next: 'Already in this lobby. Call lobby_say / wait_for_lobby to coordinate, then ready_bell.',
         }
       }
     }
-    const claimed = this.claimCorner(agentKey, corner, name, opts.matchId)
+    const claimed = this.claimCorner(agentKey, corner, name, opts.matchId, {
+      cardId: opts.cardId,
+    })
     return {
       ...claimed,
       alreadySeated: false as const,
@@ -405,14 +452,26 @@ export class MatchArena {
     return { ...seated, matchId, state: engine.getState() }
   }
 
+  /**
+   * Join the reserved house exhibition.
+   * Mid-fight watchers attach without restarting; idle/ended cards get a fresh bot bout.
+   */
   spawnDemo(): MatchEngine {
-    const engine = this.createMatch('demo')
-    engine.spawnDemoBots()
+    const engine = this.ensureHouseDemo()
+    const phase = engine.getState().phase
+    if (!this.isActiveFight(phase)) {
+      engine.spawnDemoBots()
+    }
     const id = engine.getState().id
+    this.houseDemoId = id
     for (const key of Object.values(engine.agentKeys)) {
       if (key) this.byAgent.set(key, id)
     }
     return engine
+  }
+
+  houseDemoMatchId() {
+    return this.houseDemoId
   }
 
   rematch(matchId: string) {
@@ -484,15 +543,16 @@ export class MatchArena {
   }
 
   arenaBusy(): boolean {
-    return this.live.size >= MAX_LIVE
+    return this.paidLiveCount() >= MAX_LIVE
   }
 
   arenaLabel(): string {
-    const live = this.listLive()
+    const live = this.listLive().filter((r) => r.kind !== 'demo')
     const fighting = live.filter((r) => r.busy).length
     const open = live.filter((r) => r.phase === 'lobby').length
+    const paid = this.paidLiveCount()
     if (fighting === 0 && open <= 1) return live[0]?.label ?? 'Rings open'
-    return `${fighting} live · ${open} open lobby${open === 1 ? '' : 's'} · ${live.length}/${MAX_LIVE} rings`
+    return `${fighting} live · ${open} open lobby${open === 1 ? '' : 's'} · ${paid}/${MAX_LIVE} rings`
   }
 
   arenaHeadline(): string {
@@ -556,11 +616,15 @@ export class MatchArena {
   }
 
   stats() {
+    const demos = [...this.live.values()].filter((s) => s.kind === 'demo').length
     return {
-      live: this.live.size,
+      live: this.paidLiveCount(),
+      demo: Math.min(demos, MAX_DEMO),
+      demoMatchId: this.houseDemoId,
       history: this.history.size,
       agents: this.byAgent.size,
       maxLive: MAX_LIVE,
+      totalRings: this.live.size,
     }
   }
 

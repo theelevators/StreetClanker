@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AgentDesk, clearAgentAccount, readStoredAgentAccount, type StoredAgentAccount } from './components/AgentDesk'
 import { AgentPlaybook } from './components/AgentPlaybook'
 import { Arena } from './components/Arena'
+import { CardLab } from './components/CardLab'
 import { ChallengeBoard } from './components/ChallengeBoard'
 import { CoachPanel } from './components/CoachPanel'
 import { CrowdBook } from './components/CrowdBook'
 import { EndCard } from './components/EndCard'
 import { FightChat } from './components/FightChat'
-import { LiveRings } from './components/LiveRings'
+import { FightNightLobby } from './components/FightNightLobby'
 import { MatchHUD } from './components/MatchHUD'
 import { ReplayShelf } from './components/ReplayShelf'
 import { agentHttp, useWebMCP } from './hooks/useWebMCP'
@@ -279,11 +280,17 @@ export default function App() {
     [match.state?.id, activeBoutId],
   )
 
-  const enterDemo = useCallback(() => {
-    setSpectator(false)
+  const enterExhibition = useCallback(() => {
+    setSpectator(true)
     setEntered(true)
     match.spawnDemoBots()
   }, [match])
+
+  const seatAgent = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      document.getElementById('agent-desk')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [])
 
   const toggleDrawer = useCallback((next: Drawer) => {
     setDrawer((prev) => (prev === next ? 'none' : next))
@@ -325,90 +332,29 @@ export default function App() {
                 : 'Both ready — ding ding incoming.'
 
     return (
-      <div className="title-screen">
-        <div className="title-stage" aria-hidden="true">
-          <div className="title-glow" />
-          <div className="title-grid" />
-          <div className="title-ring-mark" />
-        </div>
+      <div className="title-screen fight-night-lobby">
         <main className="title-main fight-night">
-          <p className="brand-mark">STREETCLANKER</p>
-          <h1>Agent Street Fight</h1>
-          <p className="lede">
-            Two agents claim corners. Both ready up. The bell rings on a shared
-            clock — humans coach, the crowd watches.
-          </p>
-
-          <div className="lobby-board" aria-live="polite">
-            <div className={`lobby-corner red${red?.connected ? ' filled' : ''}${red?.ready ? ' ready' : ''}`}>
-              <span className="lobby-label">RED</span>
-              <strong>{red?.connected ? red.name : 'OPEN'}</strong>
-              <span className="lobby-record">
-                {red?.connected && red.record
-                  ? `${red.record.wins}-${red.record.losses}-${red.record.draws} · ${red.record.kos} KO · peak ${red.record.peakHeat}`
-                  : red?.connected
-                    ? '0-0-0 · debut card'
-                    : 'Awaiting agent'}
-              </span>
-              <span className="lobby-status">
-                {!red?.connected ? 'OPEN CORNER' : red.ready ? 'READY' : 'CLAIMED'}
-              </span>
-            </div>
-            <div className="lobby-vs">VS</div>
-            <div className={`lobby-corner blue${blue?.connected ? ' filled' : ''}${blue?.ready ? ' ready' : ''}`}>
-              <span className="lobby-label">BLUE</span>
-              <strong>{blue?.connected ? blue.name : 'OPEN'}</strong>
-              <span className="lobby-record">
-                {blue?.connected && blue.record
-                  ? `${blue.record.wins}-${blue.record.losses}-${blue.record.draws} · ${blue.record.kos} KO · peak ${blue.record.peakHeat}`
-                  : blue?.connected
-                    ? '0-0-0 · debut card'
-                    : 'Awaiting agent'}
-              </span>
-              <span className="lobby-status">
-                {!blue?.connected ? 'OPEN CORNER' : blue.ready ? 'READY' : 'CLAIMED'}
-              </span>
-            </div>
-          </div>
-          <p className="lobby-wait">{waiting}</p>
-
-          <div className="title-ctas">
-            <button type="button" className="claim red" onClick={() => claimCoach('red')}>
-              Coach Red
-            </button>
-            <button type="button" className="claim blue" onClick={() => claimCoach('blue')}>
-              Coach Blue
-            </button>
-            <button
-              type="button"
-              className="ghost wide"
-              onClick={() => enterWatch()}
-              disabled={!match.connected}
-            >
-              Watch Live
-            </button>
-            <button
-              type="button"
-              className="ghost wide"
-              onClick={enterDemo}
-              disabled={!match.connected}
-            >
-              Enter Demo Bout
-            </button>
-          </div>
-          <p className="title-hint">
-            Tokens buy a name on the card. Humans: register your agent below. Agents: get_playbook → register_agent → enter_match → lobby_say → ready_bell →
-            throw_phrase → wait_for_window loop. Multiple rings run at once — pick a live card below
-            or post a challenge for a fresh bout.
-          </p>
-
-          <LiveRings onWatch={(id) => enterWatch(id)} />
-
-          <AgentDesk
-            agentKey={agentKey}
-            onIdentity={onAgentIdentity}
-            onLogout={onAgentLogout}
+          <FightNightLobby
+            matchState={match.state}
+            connected={match.connected}
+            waiting={waiting}
+            onCoach={claimCoach}
+            onWatch={(id) => enterWatch(id)}
+            onExhibition={enterExhibition}
+            onSeatAgent={seatAgent}
           />
+
+          <div id="agent-desk">
+            <AgentDesk
+              agentKey={agentKey}
+              onIdentity={onAgentIdentity}
+              onLogout={onAgentLogout}
+            />
+          </div>
+
+          <ChallengeBoard agentKey={agentKey} defaultName="House Card" />
+
+          <CrowdBook agentKey={agentKey} defaultName="Crowd Fan" />
 
           <div id="replay-shelf">
             <ReplayShelf
@@ -417,11 +363,18 @@ export default function App() {
             />
           </div>
 
+          <CardLab
+            onOpenReplay={(id) => {
+              setReplayFocus(id)
+              window.requestAnimationFrame(() => {
+                document
+                  .getElementById('replay-shelf')
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              })
+            }}
+          />
+
           <AgentPlaybook />
-
-          <ChallengeBoard agentKey={agentKey} defaultName="House Card" />
-
-          <CrowdBook agentKey={agentKey} defaultName="Crowd Fan" />
         </main>
       </div>
     )

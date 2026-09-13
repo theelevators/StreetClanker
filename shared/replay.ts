@@ -22,6 +22,7 @@ function slimFighter(f: FighterPublic): FighterPublic {
     health: f.health,
     maxHealth: f.maxHealth,
     stamina: f.stamina,
+    maxStamina: f.maxStamina,
     guard: f.guard,
     knockedOut: f.knockedOut,
     lastAction: f.lastAction,

@@ -9,6 +9,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { BoutResult, Corner, MatchState } from '../shared/types.ts'
 import { slimMatchState, type ReplayFrame } from '../shared/replay.ts'
+import {
+  isBenchCardId,
+  scoreTape,
+  type AgentProvenance,
+  type BenchCardId,
+  type BoutScorecard,
+} from '../shared/bench.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '../data/bouts')
@@ -40,39 +47,59 @@ export type MatchTape = {
   matchId: string
   startedAt: number
   endedAt: number | null
+  /** Named bench card — `open_brawl` for free play. */
+  cardId: BenchCardId
   red: { id: string | null; name: string } | null
   blue: { id: string | null; name: string } | null
+  redProvenance: AgentProvenance | null
+  blueProvenance: AgentProvenance | null
   events: MatchTapeEvent[]
   /** Visual ring film — MatchState snapshots for TV rematch. */
   frames: ReplayFrame[]
   result: BoutResult | null
 }
 
-const MAX_EVENTS = 800
+const MAX_EVENTS = 1200
 const MAX_FRAMES = 1800
-const MAX_DISK_BOUTS = 80
+const MAX_DISK_BOUTS = 120
 
 /**
- * Per-ring event tape + visual frame film for replay.
+ * Per-ring event tape + visual frame film for replay / bench analysis.
  * Live rings keep an in-memory tape; finished bouts flush to data/bouts/.
  */
 export class MatchTapeStore {
   private live = new Map<string, MatchTape>()
 
-  start(matchId: string) {
+  start(matchId: string, cardId: BenchCardId = 'open_brawl') {
     const existing = this.live.get(matchId)
-    if (existing) return existing
+    if (existing) {
+      if (cardId !== 'open_brawl') existing.cardId = cardId
+      return existing
+    }
     const tape: MatchTape = {
       matchId,
       startedAt: Date.now(),
       endedAt: null,
+      cardId: isBenchCardId(cardId) ? cardId : 'open_brawl',
       red: null,
       blue: null,
+      redProvenance: null,
+      blueProvenance: null,
       events: [],
       frames: [],
       result: null,
     }
     this.live.set(matchId, tape)
+    return tape
+  }
+
+  setCard(matchId: string, cardId: BenchCardId) {
+    const tape = this.live.get(matchId) ?? this.start(matchId, cardId)
+    tape.cardId = cardId
+    this.append(matchId, {
+      kind: 'phase',
+      detail: { note: 'card_set', cardId },
+    })
     return tape
   }
 
@@ -115,6 +142,38 @@ export class MatchTapeStore {
     return tape
   }
 
+  /**
+   * Structured tool-outcome row for bench analysis.
+   * Prefer this over bare append for fight-loop tools.
+   */
+  recordToolOutcome(
+    matchId: string,
+    input: {
+      tool: string
+      agentId?: string
+      corner?: Corner
+      ok?: boolean
+      latencyMs?: number
+      text?: string
+      detail?: Record<string, unknown>
+      at?: number
+    },
+  ) {
+    return this.append(matchId, {
+      at: input.at,
+      kind: 'tool',
+      agentId: input.agentId,
+      corner: input.corner,
+      tool: input.tool,
+      text: input.text,
+      detail: {
+        ok: input.ok !== false,
+        latencyMs: input.latencyMs,
+        ...input.detail,
+      },
+    })
+  }
+
   /** Snapshot the ring for TV rematch — throttled by the engine. */
   captureFrame(matchId: string, state: MatchState, at = Date.now()) {
     const tape = this.live.get(matchId) ?? this.start(matchId)
@@ -123,7 +182,6 @@ export class MatchTapeStore {
       state: slimMatchState(state),
     })
     if (tape.frames.length > MAX_FRAMES) {
-      // Keep ends + drop early lobby padding first
       const drop = tape.frames.length - MAX_FRAMES
       tape.frames = tape.frames.slice(drop)
     }
@@ -134,10 +192,16 @@ export class MatchTapeStore {
     matchId: string,
     corner: Corner,
     fighter: { id: string | null; name: string } | null,
+    provenance: AgentProvenance | null = null,
   ) {
     const tape = this.live.get(matchId) ?? this.start(matchId)
-    if (corner === 'red') tape.red = fighter
-    else tape.blue = fighter
+    if (corner === 'red') {
+      tape.red = fighter
+      if (provenance !== undefined) tape.redProvenance = provenance
+    } else {
+      tape.blue = fighter
+      if (provenance !== undefined) tape.blueProvenance = provenance
+    }
   }
 
   finish(matchId: string, result: BoutResult) {
@@ -153,6 +217,7 @@ export class MatchTapeStore {
         method: result.method,
         cardHeat: result.cardHeat,
         frameCount: tape.frames.length,
+        cardId: tape.cardId,
       },
     })
     this.persist(tape)
@@ -165,6 +230,12 @@ export class MatchTapeStore {
     return this.loadDisk(matchId)
   }
 
+  scorecard(matchId: string): BoutScorecard | null {
+    const tape = this.get(matchId)
+    if (!tape) return null
+    return scoreTape(tape)
+  }
+
   /** Compact agent-facing summary — not the full raw dump. */
   summary(matchId: string, limit = 40) {
     const tape = this.get(matchId)
@@ -173,10 +244,13 @@ export class MatchTapeStore {
     return {
       ok: true as const,
       matchId: tape.matchId,
+      cardId: tape.cardId,
       startedAt: tape.startedAt,
       endedAt: tape.endedAt,
       red: tape.red,
       blue: tape.blue,
+      redProvenance: tape.redProvenance,
+      blueProvenance: tape.blueProvenance,
       eventCount: tape.events.length,
       frameCount: tape.frames.length,
       hasFilm: tape.frames.length > 0,
@@ -190,18 +264,26 @@ export class MatchTapeStore {
         detail: e.detail,
       })),
       result: tape.result,
+      scorecard: scoreTape(tape),
       replayPath: `/api/bout/${tape.matchId}/tape`,
+      benchPath: `/api/bench/bout/${tape.matchId}`,
     }
   }
 
-  /** Newest finished (and live) tapes for the replay shelf. */
-  listRecent(limit = 24) {
+  /** Newest finished (and live) tapes for the replay shelf / bench filters. */
+  listRecent(
+    limit = 24,
+    opts: { cardId?: BenchCardId; model?: string; finishedOnly?: boolean } = {},
+  ) {
     const cards: Array<{
       matchId: string
+      cardId: BenchCardId
       startedAt: number
       endedAt: number | null
       redName: string
       blueName: string
+      redModel: string | null
+      blueModel: string | null
       winner: BoutResult['winner'] | null
       method: BoutResult['method'] | null
       eventCount: number
@@ -209,24 +291,41 @@ export class MatchTapeStore {
       hasFilm: boolean
       live: boolean
       replayPath: string
+      benchPath: string
     }> = []
 
-    for (const tape of this.live.values()) {
+    const push = (tape: MatchTape, live: boolean) => {
+      if (opts.finishedOnly && live) return
+      if (opts.cardId && tape.cardId !== opts.cardId) return
+      if (opts.model) {
+        const m = opts.model.toLowerCase()
+        const redM = tape.redProvenance?.model?.toLowerCase() ?? ''
+        const blueM = tape.blueProvenance?.model?.toLowerCase() ?? ''
+        if (!redM.includes(m) && !blueM.includes(m)) return
+      }
       const frames = tape.frames?.length ?? 0
       cards.push({
         matchId: tape.matchId,
+        cardId: tape.cardId,
         startedAt: tape.startedAt,
         endedAt: tape.endedAt,
         redName: tape.red?.name ?? 'RED',
         blueName: tape.blue?.name ?? 'BLUE',
+        redModel: tape.redProvenance?.model ?? null,
+        blueModel: tape.blueProvenance?.model ?? null,
         winner: tape.result?.winner ?? null,
         method: tape.result?.method ?? null,
         eventCount: tape.events.length,
         frameCount: frames,
         hasFilm: frames > 0,
-        live: !tape.endedAt,
+        live,
         replayPath: `/api/bout/${tape.matchId}/tape`,
+        benchPath: `/api/bench/bout/${tape.matchId}`,
       })
+    }
+
+    for (const tape of this.live.values()) {
+      push(this.normalize(tape), !tape.endedAt)
     }
 
     try {
@@ -237,21 +336,7 @@ export class MatchTapeStore {
         if (this.live.has(id)) continue
         const tape = this.loadDisk(id)
         if (!tape) continue
-        const frames = tape.frames?.length ?? 0
-        cards.push({
-          matchId: tape.matchId,
-          startedAt: tape.startedAt,
-          endedAt: tape.endedAt,
-          redName: tape.red?.name ?? 'RED',
-          blueName: tape.blue?.name ?? 'BLUE',
-          winner: tape.result?.winner ?? null,
-          method: tape.result?.method ?? null,
-          eventCount: tape.events.length,
-          frameCount: frames,
-          hasFilm: frames > 0,
-          live: false,
-          replayPath: `/api/bout/${tape.matchId}/tape`,
-        })
+        push(tape, false)
       }
     } catch {
       /* ignore disk issues */
@@ -259,11 +344,32 @@ export class MatchTapeStore {
 
     return cards
       .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt))
-      .slice(0, Math.max(1, Math.min(limit, 60)))
+      .slice(0, Math.max(1, Math.min(limit, 80)))
+  }
+
+  listScorecards(
+    limit = 40,
+    opts: { cardId?: BenchCardId; model?: string } = {},
+  ): BoutScorecard[] {
+    const recent = this.listRecent(Math.max(limit * 2, 40), {
+      ...opts,
+      finishedOnly: true,
+    })
+    const out: BoutScorecard[] = []
+    for (const row of recent) {
+      const card = this.scorecard(row.matchId)
+      if (card) out.push(card)
+      if (out.length >= limit) break
+    }
+    return out
   }
 
   private normalize(tape: MatchTape): MatchTape {
     if (!Array.isArray(tape.frames)) tape.frames = []
+    if (!Array.isArray(tape.events)) tape.events = []
+    if (!isBenchCardId(tape.cardId)) tape.cardId = 'open_brawl'
+    if (tape.redProvenance === undefined) tape.redProvenance = null
+    if (tape.blueProvenance === undefined) tape.blueProvenance = null
     return tape
   }
 

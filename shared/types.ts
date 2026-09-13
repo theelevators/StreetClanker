@@ -42,6 +42,8 @@ export interface ActivePhrase {
   endsAt: number
   /** beat indexes already resolved on the ring clock */
   resolved: number[]
+  /** Gross stamina charged at commit (before hit refunds) — used for bench scoring */
+  staminaCost?: number
 }
 
 export type ImpactResult = 'hit' | 'blocked' | 'dodged'
@@ -112,6 +114,8 @@ export interface FighterPublic {
   /** Absolute HP ceiling for bar normalization */
   maxHealth: number
   stamina: number
+  /** Absolute stamina ceiling (bench cards may scale this) */
+  maxStamina: number
   guard: number
   knockedOut: boolean
   lastAction: FightAction | null

@@ -165,7 +165,7 @@ function FighterMeter({
         <span className={`meter-status status-${status.toLowerCase()}`}>{status}</span>
       </div>
       <Bar label="HP" value={fighter.health} max={fighter.maxHealth} tone="health" />
-      <Bar label="STM" value={fighter.stamina} max={MAX_STAMINA} tone="stamina" />
+      <Bar label="STM" value={fighter.stamina} max={fighter.maxStamina ?? MAX_STAMINA} tone="stamina" />
       {fighter.comboCount > 1 && (
         <div className="combo-chip" aria-live="polite">
           <span className="combo-count">{fighter.comboCount} HIT</span>

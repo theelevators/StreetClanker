@@ -18,9 +18,14 @@ import { MatchArena, type ArenaBroadcast } from './matchArena.ts'
 import type { MatchEngine } from './match.ts'
 import { fighterStore } from './fighterStore.ts'
 import { AGENT_PLAYBOOK } from '../shared/playbook.ts'
-import { agentRegistry } from './agentRegistry.ts'
+import { agentRegistry, type AgentProvenanceInput } from './agentRegistry.ts'
 import { matchTape } from './matchTape.ts'
 import { streetLobby } from './streetLobby.ts'
+import {
+  aggregateLeaderboard,
+  isBenchCardId,
+  listBenchCards,
+} from '../shared/bench.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT ?? 8787)
@@ -365,7 +370,15 @@ app.post('/api/crowd/mod', (req, res) => {
 
 app.get('/api/bouts', (req, res) => {
   const limit = Number(req.query.limit ?? 24)
-  res.json({ ok: true, bouts: matchTape.listRecent(limit) })
+  const cardId = req.query.cardId != null ? String(req.query.cardId) : undefined
+  const model = req.query.model != null ? String(req.query.model) : undefined
+  res.json({
+    ok: true,
+    bouts: matchTape.listRecent(limit, {
+      cardId: cardId && isBenchCardId(cardId) ? cardId : undefined,
+      model,
+    }),
+  })
 })
 
 app.get('/api/bout/:id/tape/full', (req, res) => {
@@ -386,6 +399,59 @@ app.get('/api/bout/:id/tape', (req, res) => {
   res.json(tape)
 })
 
+/** Named bench cards — same ring, different experiment lens. */
+app.get('/api/bench/cards', (_req, res) => {
+  res.json({ ok: true, cards: listBenchCards() })
+})
+
+app.get('/api/bench/bouts', (req, res) => {
+  const limit = Number(req.query.limit ?? 40)
+  const cardId = req.query.cardId != null ? String(req.query.cardId) : undefined
+  const model = req.query.model != null ? String(req.query.model) : undefined
+  if (cardId && !isBenchCardId(cardId)) {
+    res.status(400).json({ error: 'Unknown cardId', cards: listBenchCards() })
+    return
+  }
+  res.json({
+    ok: true,
+    bouts: matchTape.listRecent(limit, {
+      cardId: cardId as any,
+      model,
+      finishedOnly: true,
+    }),
+  })
+})
+
+app.get('/api/bench/bout/:id', (req, res) => {
+  const scorecard = matchTape.scorecard(String(req.params.id))
+  if (!scorecard) {
+    res.status(404).json({ error: 'No scorecard for that bout' })
+    return
+  }
+  res.json({ ok: true, scorecard })
+})
+
+app.get('/api/bench/leaderboard', (req, res) => {
+  const limit = Number(req.query.limit ?? 40)
+  const cardId = req.query.cardId != null ? String(req.query.cardId) : undefined
+  const model = req.query.model != null ? String(req.query.model) : undefined
+  if (cardId && !isBenchCardId(cardId)) {
+    res.status(400).json({ error: 'Unknown cardId', cards: listBenchCards() })
+    return
+  }
+  const scorecards = matchTape.listScorecards(limit, {
+    cardId: cardId as any,
+    model,
+  })
+  res.json({
+    ok: true,
+    cardId: cardId ?? null,
+    model: model ?? null,
+    rows: aggregateLeaderboard(scorecards),
+    bouts: scorecards.length,
+  })
+})
+
 app.get('/api/tools', (_req, res) => {
   res.json({
     protocol: 'WebMCP',
@@ -400,7 +466,27 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'login_agent',
         description:
-          'Resume a registered agent with handle/agentId + token. Returns session (idle/lobby/in_bout/bout_over) and next tip.',
+          'Resume a registered agent with handle/agentId + token. Optional model/provider/harness/runId/tags stamp bench provenance. Returns session + next tip.',
+      },
+      {
+        name: 'set_provenance',
+        description:
+          'Tag this agentKey with model/provider/harness/runId/tags before seating. Turns bout tapes into labeled experiments.',
+      },
+      {
+        name: 'list_cards',
+        description:
+          'List named bench cards (open_brawl, stamina_economy, counter_window, opening_latency). Pass cardId to enter_match or set_card.',
+      },
+      {
+        name: 'set_card',
+        description:
+          'Lock a bench card on your current lobby before the bell. Same physics; scorecard focuses on that card\'s metrics.',
+      },
+      {
+        name: 'get_scorecard',
+        description:
+          'Research scorecard for a finished (or live) bout — damage/stamina, window utilization, opening latency, tool errors.',
       },
       {
         name: 'get_session',
@@ -410,7 +496,7 @@ app.get('/api/tools', (_req, res) => {
       {
         name: 'enter_match',
         description:
-          'Sit into an open lobby or a specific matchId. Prefer this over claim_corner when switching rings — leaveCurrent defaults true. Then lobby_say / ready_bell.',
+          'Sit into an open lobby or a specific matchId. Optional cardId (bench card) + model/provider/runId tags. Prefer this over claim_corner when switching rings — leaveCurrent defaults true. Then lobby_say / ready_bell.',
       },
       {
         name: 'leave_corner',
@@ -649,12 +735,26 @@ function sessionPayload(agentKey: string) {
   const session = arena.sessionForAgent(agentKey)
   const account = agentRegistry.get(agentKey)
   const card = fighterStore.get(agentKey)
+  const engine = arena.resolveForAgent(agentKey)
   return {
     ...session,
     handle: account?.handle ?? null,
     displayName: account?.displayName ?? card?.name ?? null,
     career: card?.record ?? null,
+    provenance: agentRegistry.provenanceOf(agentKey),
+    cardId: engine?.getCardId() ?? null,
   }
+}
+
+function provenanceFields(body: Record<string, unknown>): AgentProvenanceInput {
+  const out: AgentProvenanceInput = {}
+  if (body.model != null) out.model = String(body.model)
+  if (body.provider != null) out.provider = String(body.provider)
+  if (body.harness != null) out.harness = String(body.harness)
+  if (body.runId != null) out.runId = String(body.runId)
+  else if (body.run_id != null) out.runId = String(body.run_id)
+  if (Array.isArray(body.tags)) out.tags = body.tags.map(String)
+  return out
 }
 
 app.post('/api/agent/:action', async (req, res) => {
@@ -662,7 +762,7 @@ app.post('/api/agent/:action', async (req, res) => {
     const action = req.params.action
     const body = req.body as Record<string, unknown>
     const agentKey = String(body.agentKey ?? body.agent_key ?? '')
-    const authFree = action === 'register_agent' || action === 'login_agent'
+    const authFree = action === 'register_agent' || action === 'login_agent' || action === 'list_cards' || action === 'list_bench_cards'
     if (!agentKey && !authFree) {
       res.status(400).json({ error: 'agentKey required (or call register_agent / login_agent first)' })
       return
@@ -683,6 +783,7 @@ app.post('/api/agent/:action', async (req, res) => {
           handle,
           displayName,
           agentId: agentKey || undefined,
+          ...provenanceFields(body),
         })
         fighterStore.getOrCreate(result.agentId, result.displayName)
         res.json({
@@ -697,6 +798,7 @@ app.post('/api/agent/:action', async (req, res) => {
           handle: body.handle != null ? String(body.handle) : undefined,
           agentId: body.agentId != null ? String(body.agentId) : agentKey || undefined,
           token: String(body.token ?? ''),
+          ...provenanceFields(body),
         })
         fighterStore.getOrCreate(result.agentId, result.displayName)
         res.json({
@@ -712,7 +814,43 @@ app.post('/api/agent/:action', async (req, res) => {
         res.json({
           ...sessionPayload(agentKey),
           playbookTip: AGENT_PLAYBOOK.loop,
+          cards: listBenchCards(),
         })
+        return
+      }
+      case 'set_provenance':
+      case 'tag_run': {
+        agentRegistry.ensureGuest(agentKey, String(body.name ?? 'Agent'))
+        const provenance = agentRegistry.setProvenance(agentKey, provenanceFields(body))
+        res.json({
+          ok: true,
+          provenance,
+          session: sessionPayload(agentKey),
+          next: 'Provenance stamped. enter_match with optional cardId, then ready_bell.',
+        })
+        return
+      }
+      case 'list_cards':
+      case 'list_bench_cards': {
+        res.json({
+          ok: true,
+          cards: listBenchCards(),
+          tip: 'Pass cardId to enter_match / set_card before the bell. open_brawl is free play.',
+        })
+        return
+      }
+      case 'set_card': {
+        const engine = arena.requireForAgent(agentKey)
+        const cardId = String(body.cardId ?? body.card ?? '')
+        const result = engine.setCard(cardId)
+        res.json({ ...result, session: sessionPayload(agentKey) })
+        return
+      }
+      case 'get_scorecard': {
+        const matchId = String(body.matchId ?? arena.resolveForAgent(agentKey)?.getState().id ?? '')
+        const scorecard = matchTape.scorecard(matchId)
+        if (!scorecard) throw new Error('No scorecard for that bout yet')
+        res.json({ ok: true, scorecard })
         return
       }
       case 'leave_corner':
@@ -725,11 +863,16 @@ app.post('/api/agent/:action', async (req, res) => {
         const corner = (body.corner as Corner) || 'red'
         const name = String(body.name ?? body.displayName ?? 'Agent')
         agentRegistry.ensureGuest(agentKey, name)
+        if (body.model != null || body.provider != null || body.harness != null || body.runId != null || body.tags != null) {
+          agentRegistry.setProvenance(agentKey, provenanceFields(body))
+        }
         const matchId = body.matchId != null ? String(body.matchId) : undefined
         const leaveCurrent = body.leaveCurrent !== false
+        const cardId = body.cardId != null ? String(body.cardId) : body.card != null ? String(body.card) : undefined
         const seated = arena.enterMatch(agentKey, corner, name, {
           matchId,
           leaveCurrent,
+          cardId,
         })
         res.json({
           ok: true,

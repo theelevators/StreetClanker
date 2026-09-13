@@ -32,6 +32,12 @@ import {
 import { fighterStore, formatRecord } from './fighterStore.ts'
 import { matchTape } from './matchTape.ts'
 import { crowdStore } from './crowdStore.ts'
+import { agentRegistry } from './agentRegistry.ts'
+import {
+  BENCH_CARDS,
+  isBenchCardId,
+  type BenchCardId,
+} from '../shared/bench.ts'
 
 const ROUND_MS = 60_000
 const COUNTDOWN_MS = 3_000
@@ -129,6 +135,7 @@ function blankFighter(corner: Corner, name: string): FighterPublic {
     health: MAX_HEALTH,
     maxHealth: MAX_HEALTH,
     stamina: MAX_STAMINA,
+    maxStamina: MAX_STAMINA,
     guard: 0,
     knockedOut: false,
     lastAction: null,
@@ -195,6 +202,8 @@ export class MatchEngine {
   state: MatchState
   coachAdvice: Record<Corner, CoachAdvice[]> = { red: [], blue: [] }
   agentKeys: Partial<Record<Corner, string>> = {}
+  /** Bench card for this bout — defaults to free-play open_brawl. */
+  cardId: BenchCardId = 'open_brawl'
   /** Last finished bout — survives reset so share links still resolve. */
   lastFinished: BoutResult | null = null
   /** Prevent double-counting when knockout/decision also schedules ended. */
@@ -265,6 +274,30 @@ export class MatchEngine {
 
   getState(): MatchState {
     return this.state
+  }
+
+  getCardId(): BenchCardId {
+    return this.cardId
+  }
+
+  /** Pick a named bench card before the bell — same ring, different experiment lens. */
+  setCard(cardId: BenchCardId | string) {
+    if (this.state.phase !== 'lobby') {
+      throw new Error('Card is locked once the bout leaves lobby')
+    }
+    if (!isBenchCardId(cardId)) {
+      throw new Error(`Unknown cardId — try: ${Object.keys(BENCH_CARDS).join(', ')}`)
+    }
+    this.cardId = cardId
+    matchTape.setCard(this.state.id, cardId)
+    this.pushEvent(`Card locked: ${BENCH_CARDS[cardId].name}`)
+    this.emit()
+    return {
+      ok: true as const,
+      matchId: this.state.id,
+      card: BENCH_CARDS[cardId],
+      next: 'Both corners ready_bell when set — same physics, scored for this card.',
+    }
   }
 
   lobbyStatus(): LobbyStatus {
@@ -559,8 +592,11 @@ export class MatchEngine {
     this.state = this.createLobby()
     // Keep finished bout film on disk; start a fresh tape for the rematch card.
     matchTape.releaseLive(priorMatchId)
-    matchTape.start(this.state.id)
-    matchTape.append(this.state.id, { kind: 'phase', detail: { note: 'rematch', from: priorMatchId } })
+    matchTape.start(this.state.id, this.cardId)
+    matchTape.append(this.state.id, {
+      kind: 'phase',
+      detail: { note: 'rematch', from: priorMatchId, cardId: this.cardId },
+    })
     this.lastReplayFrameAt = 0
     this.lastReplayPhase = null
     this.lastReplayImpactId = null
@@ -725,13 +761,40 @@ export class MatchEngine {
       text: `${fighter.name} steps into the ${corner.toUpperCase()} corner!`,
       corner,
     })
-    matchTape.start(this.state.id)
-    matchTape.setCorner(this.state.id, corner, { id: agentKey, name: fighter.name })
+    matchTape.start(this.state.id, this.cardId)
+    const prov = agentRegistry.provenanceOf(agentKey)
+    matchTape.setCorner(
+      this.state.id,
+      corner,
+      { id: agentKey, name: fighter.name },
+      prov
+        ? {
+            agentId: prov.agentId,
+            handle: prov.handle,
+            displayName: prov.displayName,
+            model: prov.model,
+            provider: prov.provider,
+            harness: prov.harness,
+            runId: prov.runId,
+            tags: prov.tags,
+          }
+        : {
+            agentId: agentKey,
+            handle: null,
+            displayName: fighter.name,
+            model: null,
+            provider: null,
+            harness: null,
+            runId: null,
+            tags: [],
+          },
+    )
     matchTape.append(this.state.id, {
       kind: 'claim',
       agentId: agentKey,
       corner,
       text: `${fighter.name} claimed ${corner}`,
+      detail: { cardId: this.cardId, model: prov?.model ?? null },
     })
     this.flushLobbyWaiters('peer_joined')
     this.emit()
@@ -820,10 +883,29 @@ export class MatchEngine {
     }
     this.state.round = 1
     this.state.winner = null
-    this.state.red.health = MAX_HEALTH
-    this.state.blue.health = MAX_HEALTH
-    this.state.red.stamina = MAX_STAMINA
-    this.state.blue.stamina = MAX_STAMINA
+    const card = BENCH_CARDS[this.cardId]
+    const hpScale = card.mods?.healthScale ?? 1
+    const stmScale = card.mods?.staminaScale ?? 1
+    const maxHp = Math.max(1, Math.round(MAX_HEALTH * hpScale))
+    const maxStm = Math.max(1, Math.round(MAX_STAMINA * stmScale))
+    for (const c of ['red', 'blue'] as Corner[]) {
+      this.state[c].maxHealth = maxHp
+      this.state[c].health = maxHp
+      this.state[c].maxStamina = maxStm
+      this.state[c].stamina = maxStm
+    }
+    matchTape.setCard(this.state.id, this.cardId)
+    matchTape.append(this.state.id, {
+      kind: 'phase',
+      detail: {
+        note: 'bout_start',
+        cardId: this.cardId,
+        healthScale: hpScale,
+        staminaScale: stmScale,
+        maxHp,
+        maxStm,
+      },
+    })
     this.state.red.knockedOut = false
     this.state.blue.knockedOut = false
     this.state.red.ready = false
@@ -861,11 +943,15 @@ export class MatchEngine {
     this.state.phase = 'fighting'
     this.state.countdownEndsAt = null
     this.state.roundEndsAt = Date.now() + ROUND_MS
+    matchTape.append(this.state.id, {
+      kind: 'phase',
+      detail: { note: 'fighting', phase: 'fighting', round: this.state.round, cardId: this.cardId },
+    })
     const t = Date.now()
     this.state.red.guard = 0
     this.state.blue.guard = 0
-    this.state.red.stamina = Math.min(MAX_STAMINA, this.state.red.stamina + STAMINA_BETWEEN_ROUNDS)
-    this.state.blue.stamina = Math.min(MAX_STAMINA, this.state.blue.stamina + STAMINA_BETWEEN_ROUNDS)
+    this.state.red.stamina = Math.min(this.state.red.maxStamina, this.state.red.stamina + STAMINA_BETWEEN_ROUNDS)
+    this.state.blue.stamina = Math.min(this.state.blue.maxStamina, this.state.blue.stamina + STAMINA_BETWEEN_ROUNDS)
     this.state.red.nextWindowAt = t + 250
     this.state.blue.nextWindowAt = t + 250
     this.state.activePhrases = []
@@ -1026,6 +1112,7 @@ export class MatchEngine {
       startedAt: t,
       endsAt: beats[beats.length - 1]!.at + 80,
       resolved: [],
+      staminaCost: cost,
     }
 
     this.state.activePhrases = [...this.state.activePhrases, phrase]
@@ -1201,7 +1288,7 @@ export class MatchEngine {
         if (comboEval.count > 1) gain += STAMINA_ON_CHAIN * Math.min(comboEval.count - 1, 5)
         if (comboEval.recipeJustHit) gain += STAMINA_ON_RECIPE
         const before = attacker.stamina
-        attacker.stamina = Math.min(MAX_STAMINA, attacker.stamina + gain)
+        attacker.stamina = Math.min(attacker.maxStamina, attacker.stamina + gain)
         if (comboEval.recipeJustHit) {
           this.pushEvent(
             `${attacker.name} meters up +${Math.round(attacker.stamina - before)} STM — special refund`,
@@ -1230,6 +1317,20 @@ export class MatchEngine {
       move,
       result,
       damage: impact.damage,
+    })
+    matchTape.append(this.state.id, {
+      kind: 'impact',
+      agentId: this.agentKeys[phrase.corner],
+      corner: phrase.corner,
+      text: `${move}:${result}`,
+      detail: {
+        attacker: impact.attacker,
+        defender: impact.defender,
+        action: impact.action,
+        result: impact.result,
+        damage: impact.damage,
+        impactId: impact.id,
+      },
     })
     this.emit()
 
@@ -1325,7 +1426,7 @@ export class MatchEngine {
       const f = this.state[c]
       if (!this.hasActivePhrase(c) && !f.covering) {
         const before = f.stamina
-        f.stamina = Math.min(MAX_STAMINA, f.stamina + 0.32)
+        f.stamina = Math.min(f.maxStamina, f.stamina + 0.32)
         if (f.stamina !== before) dirty = true
       }
     }
@@ -1773,23 +1874,42 @@ export class MatchEngine {
     }
     this.touchAgent(corner)
     const maxMs = Math.min(Math.max(opts.maxMs ?? 12_000, 250), 45_000)
+    const started = Date.now()
+    const logWake = (payload: Record<string, unknown>) => {
+      matchTape.recordToolOutcome(this.state.id, {
+        tool: 'wait_for_window',
+        agentId: agentKey,
+        corner,
+        ok: true,
+        latencyMs: Date.now() - started,
+        text: typeof payload.headline === 'string' ? payload.headline : undefined,
+        detail: {
+          wakeReason: payload.wakeReason ?? payload.reason ?? null,
+          windowOpen: payload.windowOpen ?? null,
+          phase: payload.phase ?? this.state.phase,
+          yourHp: (payload.you as { health?: number } | undefined)?.health ?? null,
+          foeHp: (payload.foe as { health?: number } | undefined)?.health ?? null,
+        },
+      })
+      return payload
+    }
     const snap = this.agentWakeSnapshot(agentKey, 'window_open')
     if (snap.shouldWake) {
-      return Promise.resolve(snap.payload)
+      return Promise.resolve(logWake(snap.payload))
     }
 
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.windowWaiters = this.windowWaiters.filter((w) => w.timer !== timer)
         this.touchAgent(corner)
-        resolve(this.agentWakeSnapshot(agentKey, 'timeout').payload)
+        resolve(logWake(this.agentWakeSnapshot(agentKey, 'timeout').payload))
       }, maxMs)
       this.windowWaiters.push({
         agentKey,
         resolve: (value) => {
           clearTimeout(timer)
           this.touchAgent(corner)
-          resolve(value)
+          resolve(logWake(value))
         },
         timer,
         want: 'window',
@@ -2032,6 +2152,41 @@ export class MatchEngine {
       const key = this.agentKeys[corner]
       if (key) wake = this.slimWake(key, 'window_open')
     }
+    const agentId = this.agentKeys[corner]
+    matchTape.recordToolOutcome(this.state.id, {
+      tool: 'throw_phrase',
+      agentId,
+      corner,
+      ok: true,
+      text: pack.headline,
+      detail: {
+        hits: pack.hits,
+        damage: pack.damage,
+        staminaSpent: pack.staminaSpent,
+        staminaNow: pack.staminaNow,
+        yourHp: pack.yourHp,
+        foeHp: pack.foeHp,
+        style: pack.style,
+        recipe: pack.recipe,
+        beats: pack.beats,
+        windowOpen: pack.windowOpen,
+        msToWindow: pack.msToWindow,
+      },
+    })
+    matchTape.append(this.state.id, {
+      kind: 'phrase',
+      agentId,
+      corner,
+      text: pack.headline,
+      detail: {
+        hits: pack.hits,
+        damage: pack.damage,
+        staminaSpent: pack.staminaSpent,
+        style: pack.style,
+        recipe: pack.recipe,
+        beats: pack.beats,
+      },
+    })
     return { ok: true, pack, wake }
   }
 
@@ -2051,7 +2206,11 @@ export class MatchEngine {
     const msToWindow = Math.max(0, (you.nextWindowAt ?? t) - t)
     const windowOpen = this.isWindowOpen(corner, t)
     const staminaDelta = Math.round(you.stamina - beforeStamina)
-    const staminaSpent = Math.max(0, Math.round(beforeStamina) - Math.round(you.stamina))
+    // Prefer gross phrase cost so hit refunds don't zero out economy metrics.
+    const staminaSpent = Math.max(
+      0,
+      committed.phrase.staminaCost ?? Math.round(beforeStamina) - Math.round(you.stamina),
+    )
     const headline = recipe
       ? `${recipe} — ${hits} hit${hits === 1 ? '' : 's'} · ${Math.round(damage)} dmg · STM ${Math.round(you.stamina)}`
       : `${committed.telegraph} — ${hits}/${beats.length} connected · ${Math.round(damage)} dmg · STM ${Math.round(you.stamina)}`
