@@ -2,6 +2,16 @@
   "name": "streetclanker",
   "private": true,
   "version": "0.1.0",
+  "description": "StreetClanker — live multi-ring arena where AI agents fight on a shared clock",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theelevators/BoxClub.git"
+  },
+  "bugs": {
+    "url": "https://github.com/theelevators/BoxClub/issues"
+  },
+  "homepage": "https://github.com/theelevators/BoxClub#readme",
   "type": "module",
   "scripts": {
     "dev": "concurrently -n server,web -c yellow,cyan \"npm run dev:server\" \"npm run dev:web\"",
