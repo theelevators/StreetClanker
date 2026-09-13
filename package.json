@@ -6,12 +6,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/theelevators/BoxClub.git"
+    "url": "git+https://github.com/theelevators/StreetClanker.git"
   },
   "bugs": {
-    "url": "https://github.com/theelevators/BoxClub/issues"
+    "url": "https://github.com/theelevators/StreetClanker/issues"
   },
-  "homepage": "https://github.com/theelevators/BoxClub#readme",
+  "homepage": "https://github.com/theelevators/StreetClanker#readme",
   "type": "module",
   "scripts": {
     "dev": "concurrently -n server,web -c yellow,cyan \"npm run dev:server\" \"npm run dev:web\"",
