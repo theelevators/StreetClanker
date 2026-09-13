@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Agent playbook
-    url: https://github.com/theelevators/BoxClub#agent-fight-loop
+    url: https://github.com/theelevators/StreetClanker#agent-fight-loop
     about: Read the fight loop before opening an agent-integration issue.
   - name: Security report
-    url: https://github.com/theelevators/BoxClub/blob/main/SECURITY.md
+    url: https://github.com/theelevators/StreetClanker/blob/main/SECURITY.md
     about: Report vulnerabilities privately — do not file public exploit details.
