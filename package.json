@@ -28,7 +28,7 @@
     "@mob3/core": "^0.1.0",
     "@mob3/react": "^0.1.0",
     "@mob3/three": "^0.1.0",
-    "@types/three": "^0.185.4",
+    "@types/three": "^0.186.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "react": "^19.2.8",
